@@ -116,7 +116,7 @@ make build-image
 ## Usage
 
 ```
-dev-agent [codex|claude|bash|tmux] [directory] [agent arguments...]
+dev-agent [--ro] [codex|claude|bash|tmux] [directory] [agent arguments...]
 ```
 
 `bash` drops you into a shell in the same sandbox, which is useful for
@@ -138,7 +138,17 @@ dev-agent codex ~/src/foo
 dev-agent claude ~/src/foo --model opus
 dev-agent bash ~/src/foo
 dev-agent tmux ~/src/foo
+dev-agent --ro claude ~/src/foo
 ```
+
+`--ro` mounts the project read-only, for when you want an agent to read the
+code and not touch it — investigating a bug, reviewing a branch, answering
+questions about an unfamiliar tree. The agent can still write to `/home/agent`
+and `/tmp`, so it keeps its own session state, but every write into the project
+fails, including `git` ones: no commits, no branch switches, no stray files.
+The flag may be given before the command or before the directory, so both
+`dev-agent --ro claude ~/src/foo` and `dev-agent claude --ro ~/src/foo` work.
+Everything from the directory onwards still goes to the agent untouched.
 
 First run of each agent will prompt you to log in. The credentials are written
 to that agent's persistent home on the host, so you only do this once.
@@ -160,7 +170,8 @@ Every container is started with:
 
 Only two paths are writable and persistent:
 
-- `/workspace` — the bind-mounted project directory.
+- `/workspace` — the bind-mounted project directory, mounted `readonly` when
+  `--ro` is given.
 - `/home/agent` — `~/.local/share/dev-agent/home` on the host, shared by every
   command.
 
