@@ -18,7 +18,7 @@ RUN apt-get update \
         build-essential \
         pkg-config \
         ripgrep \
-        procps \
+        procps vim tmux \
     && rm -rf /var/lib/apt/lists/*
 
 # Install the coding agents into the immutable image.
