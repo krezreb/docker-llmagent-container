@@ -87,12 +87,14 @@ make build-image
 ## Usage
 
 ```
-dev-agent [codex|claude|bash] [directory] [agent arguments...]
+dev-agent [codex|claude|bash|tmux] [directory] [agent arguments...]
 ```
 
 `bash` drops you into a shell in the same sandbox, which is useful for
-inspecting the image or running a command in the container by hand. To poke at
-an agent's own home from that shell, mount it: `- ~/.local/share/dev-agent/codex:/codex`.
+inspecting the image or running a command in the container by hand. `tmux` does
+the same inside a tmux session, so you can run an agent and a shell side by side
+in one container. To poke at an agent's own home from either, mount it:
+`- ~/.local/share/dev-agent/codex:/codex`.
 
 Both leading arguments are optional: the command defaults to `bash` and the
 directory to the current one, so a bare `dev-agent` is the same as
@@ -106,6 +108,7 @@ dev-agent claude .
 dev-agent codex ~/src/foo
 dev-agent claude ~/src/foo --model opus
 dev-agent bash ~/src/foo
+dev-agent tmux ~/src/foo
 ```
 
 First run of each agent will prompt you to log in. The credentials are written
