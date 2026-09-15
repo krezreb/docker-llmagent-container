@@ -23,6 +23,9 @@ and nothing else.
 
 Docker Engine, `make` and `git`. Rootless Docker works too.
 
+Make it git 2.48 or newer if you expect an agent to create git worktrees; see
+[Git worktrees](#git-worktrees) for why.
+
 ### Linux
 
 Install Docker Engine from Docker's own repository, not the distribution package —
@@ -142,6 +145,45 @@ host.
 The wrapper refuses to mount `/`, `/home`, `/root` or your home directory
 outright, since mounting any of those would defeat the purpose.
 
+## Git worktrees
+
+Agents like to work in a `git worktree`. The two files that link one back to
+its repository normally hold absolute paths, and inside the container those
+start with `/workspace` — a location that exists nowhere on the host, so the
+worktree is not a git repository at all once you step outside:
+
+```
+$ cd .claude/worktrees/readme-fix && git status
+fatal: not a git repository: /workspace/.git/worktrees/readme-fix
+```
+
+The image therefore sets `worktree.useRelativePaths` in `/etc/gitconfig`, which
+makes git write those links relative to the checkout instead. The same two
+files then resolve from either side:
+
+```
+.claude/worktrees/x/.git    gitdir: ../../../.git/worktrees/x
+.git/worktrees/x/gitdir     ../../../.claude/worktrees/x/.git
+```
+
+Relative links need **git 2.48 or newer on the host as well**. An older git
+reads and writes such a worktree without complaint, but `git worktree list`
+reports it as `prunable`, and `git gc` acts on that and drops the
+registration. `dev-agent` warns at startup when the host git is too old; on
+Ubuntu, `ppa:git-core/ppa` carries a current build:
+
+```sh
+sudo add-apt-repository ppa:git-core/ppa && sudo apt update && sudo apt install git
+```
+
+Worktrees created before this change keep their absolute paths. Repair them
+from the main checkout *inside* the container, where `/workspace` still means
+something:
+
+```sh
+dev-agent bash ~/src/foo -c 'git worktree repair'
+```
+
 ## Extending the image
 
 The image is a base to build on. Put a Dockerfile in `images/`, build it, and point
@@ -252,6 +294,7 @@ Environment variables:
 | `DEV_AGENT_IMAGE` | `dev-agent:ubuntu24` | Image to run. |
 | `DEV_AGENT_HOME` | `~/.local/share/dev-agent/home` | Host directory mounted at `/home/agent`. |
 | `DEV_AGENT_CONFIG` | `~/.config/dev-agent/config.yml` | Config file path. |
+| `DEV_AGENT_SKIP_GIT_CHECK` | unset | Set to any value to silence the warning about a host git older than 2.48. |
 
 ## Removing persistent state
 
