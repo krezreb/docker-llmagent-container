@@ -6,7 +6,7 @@ IMAGE="${DEV_AGENT_IMAGE:-dev-agent:ubuntu24}"
 usage() {
     cat >&2 <<'EOF'
 Usage:
-    dev-agent [codex|claude|bash] [directory] [agent arguments...]
+    dev-agent [codex|claude|bash|tmux] [directory] [agent arguments...]
 
 The command defaults to 'bash' and the directory to the current one.
 
@@ -17,6 +17,7 @@ Examples:
     dev-agent codex ~/src/foo
     dev-agent claude ~/src/foo --model opus
     dev-agent bash ~/src/foo
+    dev-agent tmux ~/src/foo
 EOF
     exit 2
 }
@@ -27,7 +28,7 @@ die() {
 }
 
 case "${1:-}" in
-    codex|claude|bash)
+    codex|claude|bash|tmux)
         agent="$1"
         shift
         ;;
@@ -38,7 +39,7 @@ case "${1:-}" in
         # No command given: default to bash, leave the rest of the
         # arguments alone so a bare directory still works.
         [[ $# -eq 0 || -d "${1:-}" ]] ||
-            die "agent must be 'codex', 'claude' or 'bash'"
+            die "agent must be 'codex', 'claude', 'bash' or 'tmux'"
         agent="bash"
         ;;
 esac
