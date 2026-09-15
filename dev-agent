@@ -85,6 +85,27 @@ case "$project" in
 esac
 
 #
+# Git worktrees made inside the container record their link paths relative to
+# the checkout, so they resolve both at /workspace and wherever the project
+# lives on this host. Only git 2.48 and newer understands those relative
+# paths: an older git here still reads and writes such a worktree, but calls
+# it prunable, and `git gc` then drops its registration.
+#
+if [[ -z "${DEV_AGENT_SKIP_GIT_CHECK:-}" ]] && command -v git >/dev/null 2>&1; then
+    host_git="$(git --version | awk '{print $3}')"
+
+    if [[ -n "$host_git" ]] &&
+       [[ "$(printf '%s\n2.48\n' "$host_git" | sort -V | head -n1)" != "2.48" ]]; then
+        cat >&2 <<EOF
+dev-agent: this host has git $host_git; worktrees created in the container
+           need git 2.48 or newer to be seen as valid here. Until you upgrade,
+           do not run 'git gc' or 'git worktree prune' in such a project.
+           Set DEV_AGENT_SKIP_GIT_CHECK=1 to silence this.
+EOF
+    fi
+fi
+
+#
 # Persistent HOME, kept on the host so it can be backed up and inspected.
 #
 # Shared by every command, so logins and toolchain caches are visible
