@@ -21,7 +21,8 @@ and nothing else.
 
 ## Prerequisites
 
-Docker Engine, `make` and `git`. Rootless Docker works too.
+Docker, `make` and `git`. Docker Engine on Linux (rootless works too), Docker
+Desktop or Colima on macOS.
 
 ### Linux
 
@@ -44,6 +45,61 @@ docker run --rm hello-world
 Membership of the `docker` group is equivalent to root on the host. If that is not
 acceptable, use [rootless mode](https://docs.docker.com/engine/security/rootless/)
 instead; `dev-agent` needs no changes for it.
+
+### macOS
+
+`make` and `git` come from the Xcode command line tools, which a stock macOS does
+not have:
+
+```sh
+xcode-select --install
+```
+
+Docker Desktop is the usual choice. Install it from Docker's site, or with
+Homebrew:
+
+```sh
+brew install --cask docker
+```
+
+Open it once from Applications so the daemon starts and the `docker` CLI is
+linked, then check:
+
+```sh
+docker run --rm hello-world
+```
+
+[Colima](https://github.com/abiosoft/colima) is a lighter alternative and needs
+no changes to `dev-agent`:
+
+```sh
+brew install colima docker
+colima start --cpu 4 --memory 8
+```
+
+Apple silicon and Intel both work; the images build natively on arm64, PHP from
+the `ondrej/php` PPA included.
+
+Keep your projects somewhere under your home directory. Docker Desktop shares
+`/Users` out of the box and Colima mounts your home directory, so anything under
+`~` can be mounted with no extra setup. A path outside it, such as an external
+disk under `/Volumes`, has to be added in Docker Desktop's Settings → Resources
+→ File sharing first.
+
+`~/.local/bin`, where `make install` puts the wrapper, is not on the `PATH` by
+default:
+
+```sh
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+```
+
+That line is for zsh, the default shell since Catalina. Under bash, use
+`~/.bash_profile` instead — macOS Terminal starts login shells, which read
+`~/.bash_profile` and never `~/.bashrc` unless you source it there yourself.
+
+The wrapper needs bash to run, but the system bash 3.2 that ships with macOS is
+enough; there is nothing to install. Your own shell can be zsh, bash, fish or
+anything else, since `dev-agent` is a script and not a shell function.
 
 ### WSL2
 
@@ -166,17 +222,19 @@ a base change is picked up automatically. Name a variant anything except an exis
 make target (`install`, `build-image`, `images`, `aliases`).
 
 `make aliases` saves typing `DEV_AGENT_IMAGE=` by hand — it writes one alias per
-variant to `~/.bashrc`:
+variant to your shell's rc file, `~/.zshrc` if your `SHELL` is zsh and `~/.bashrc`
+otherwise:
 
 ```sh
 make aliases
-source ~/.bashrc
+source ~/.zshrc              # or ~/.bashrc
 dev-agent-php claude .       # DEV_AGENT_IMAGE=dev-agent:php dev-agent claude .
 ```
 
 The aliases go in a marked block, so re-running after adding a variant rewrites the
 block rather than appending a second copy, and deleting the block removes them all.
-`make aliases BASHRC=~/.bash_aliases` writes somewhere else.
+`make aliases SHELL_RC=~/.bash_profile` writes somewhere else — worth it for bash on
+macOS, where Terminal reads `~/.bash_profile` rather than `~/.bashrc`.
 
 These ship, and are meant to be copied and edited rather than maintained as a
 catalogue:
@@ -267,5 +325,9 @@ rm -rf ~/.local/share/dev-agent/home
   so does anything they run in your project.
 - Anything you mount at `/workspace` is fully writable by the agent. Use the
   agent's own approval settings if you want a further check on that.
-- Docker on Linux is assumed; the `--user` mapping and bind mount semantics
-  differ on Docker Desktop for macOS and Windows.
+- On macOS your uid (usually 501) has no entry in the image's `/etc/passwd`, so
+  the shell prompt reads `I have no name!` and `whoami` fails. It is cosmetic:
+  `HOME` is set explicitly, and the agents, git and the toolchains do not care.
+- Bind mounts on macOS go through a VM, so large repositories are slower than on
+  Linux. Docker Desktop's VirtioFS setting (Settings → General) is the fastest of
+  its options.

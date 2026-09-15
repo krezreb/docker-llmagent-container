@@ -37,6 +37,34 @@ die() {
     exit 1
 }
 
+#
+# Absolute, symlink-free path to an existing file or directory.
+#
+# GNU realpath does this in one call, but macOS ships the BSD one, which has
+# no -e, so resolve it with shell builtins instead.
+#
+abspath() {
+    local path="$1" link dir hops=0
+
+    [[ -e "$path" ]] || return 1
+
+    while [[ -L "$path" && $hops -lt 32 ]]; do
+        link="$(readlink "$path")"
+        case "$link" in
+            /*) path="$link" ;;
+            *)  path="$(dirname "$path")/$link" ;;
+        esac
+        hops=$((hops + 1))
+    done
+
+    if [[ -d "$path" ]]; then
+        (cd "$path" && pwd -P)
+    else
+        dir="$(cd "$(dirname "$path")" && pwd -P)" || return 1
+        printf '%s/%s\n' "${dir%/}" "$(basename "$path")"
+    fi
+}
+
 case "${1:-}" in
     codex|claude|bash|tmux)
         agent="$1"
@@ -62,7 +90,7 @@ else
     project="."
 fi
 
-project="$(realpath -e "$project")"
+project="$(abspath "$project")" || die "not a directory: $project"
 
 [[ -d "$project" ]] || die "not a directory: $project"
 
@@ -113,7 +141,7 @@ if [[ -f "$config" ]]; then
             die "$config: mount must be src:dst[:ro], got: $entry"
 
         src="${src/#\~/$HOME}"
-        src="$(realpath -e "$src" 2>/dev/null)" ||
+        src="$(abspath "$src")" ||
             die "$config: mount source does not exist: $entry"
 
         case "$opt" in
@@ -122,11 +150,11 @@ if [[ -f "$config" ]]; then
             *)    die "$config: unknown mount option '$opt' in: $entry" ;;
         esac
     done < <(awk '
-        /^mounts:/                  { in_mounts = 1; next }
-        in_mounts && /^[^[:space:]]/ { in_mounts = 0 }
-        in_mounts && /^[[:space:]]*-[[:space:]]/ {
-            sub(/^[[:space:]]*-[[:space:]]*/, "")
-            sub(/[[:space:]]+#.*$/, "")
+        /^mounts:/             { in_mounts = 1; next }
+        in_mounts && /^[^ \t]/ { in_mounts = 0 }
+        in_mounts && /^[ \t]*-[ \t]/ {
+            sub(/^[ \t]*-[ \t]*/, "")
+            sub(/[ \t]+#.*$/, "")
             gsub(/^["'"'"']|["'"'"']$/, "")
             if ($0 != "") print
         }
@@ -176,7 +204,7 @@ docker_args=(
 
 )
 
-docker_args+=("${extra_mounts[@]}")
+docker_args+=(${extra_mounts[@]+"${extra_mounts[@]}"})
 docker_args+=("$IMAGE" "$agent" "$@")
 
 exec docker "${docker_args[@]}"
