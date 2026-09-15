@@ -7,3 +7,7 @@ mounts:
   # - ~/.gitconfig:/home/agent/.gitconfig:ro
   # - ~/.ssh:/home/agent/.ssh:ro
   # - ~/src/shared-lib:/shared:ro
+  # tmux users can share their host's conf with container
+  # - ~/.tmux.conf:/home/agent/.tmux.conf:ro
+  # same for vim conf
+  # - ~/.vimrc:/home/agent/.vimrc:ro
