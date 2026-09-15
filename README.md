@@ -39,7 +39,8 @@ decide what it may do with what exists. Keep both.
 - **Ubuntu 24.04 image** with both agents preinstalled globally via npm, plus the
   tooling they expect (git, curl, jq, ripgrep, python3, build-essential).
 - **`dev-agent` wrapper script** that starts a container with a hardened set of
-  Docker flags and bind-mounts exactly one project directory at `/workspace`.
+  Docker flags and bind-mounts exactly one project directory, at the very path
+  it has on the host, so the paths an agent reports mean the same on both sides.
 - **One persistent home** at `~/.local/share/dev-agent/home`, shared by every
   command, so login state and toolchain caches survive between runs and are the
   same whichever command you start.
@@ -116,7 +117,7 @@ make build-image
 ## Usage
 
 ```
-dev-agent [--ro] [codex|claude|bash|tmux] [directory] [agent arguments...]
+dev-agent [--ro] [--workspace] [codex|claude|bash|tmux] [directory] [agent arguments...]
 ```
 
 `bash` drops you into a shell in the same sandbox, which is useful for
@@ -139,6 +140,7 @@ dev-agent claude ~/src/foo --model opus
 dev-agent bash ~/src/foo
 dev-agent tmux ~/src/foo
 dev-agent --ro claude ~/src/foo
+dev-agent --workspace claude ~/src/foo
 ```
 
 `--ro` mounts the project read-only, for when you want an agent to read the
@@ -146,12 +148,38 @@ code and not touch it — investigating a bug, reviewing a branch, answering
 questions about an unfamiliar tree. The agent can still write to `/home/agent`
 and `/tmp`, so it keeps its own session state, but every write into the project
 fails, including `git` ones: no commits, no branch switches, no stray files.
-The flag may be given before the command or before the directory, so both
+
+Options may be given before the command or before the directory, so both
 `dev-agent --ro claude ~/src/foo` and `dev-agent claude --ro ~/src/foo` work.
 Everything from the directory onwards still goes to the agent untouched.
 
 First run of each agent will prompt you to log in. The credentials are written
 to that agent's persistent home on the host, so you only do this once.
+
+## Where the project lives
+
+The project is mounted at the path it already has on this host, and the agent
+starts there. A checkout at `~/src/foo` is `/home/you/src/foo` on both sides,
+so every path an agent prints — a file it changed, a frame in a stack trace, a
+command it suggests you run — is a path that also exists out here, ready to
+paste into your own shell. It is still exactly one mount with the same
+guarantees; only its destination follows the host.
+
+Two consequences are worth knowing. The container learns the layout of your
+home directory — it still cannot reach anything outside the mount, but the name
+of the path crosses over. And both agents key their per-project state — session
+history, todos — by working directory, so each project now keeps its own
+instead of every project sharing one `/workspace` key.
+
+`--workspace` mounts at `/workspace` instead, the way this wrapper behaved
+before, and `DEV_AGENT_MIRROR=0` in your shell profile makes that the default
+again; `--mirror` then brings a single run back to the host path.
+
+A handful of paths cannot be mirrored: anything inside the container's own
+`/home/agent`, and the image's top-level directories such as `/etc` or `/tmp`,
+which the project would hide. Those fall back to `/workspace` with a note on
+stderr, unless you asked for `--mirror` by name, which turns the fallback into
+an error.
 
 ## Sandbox details
 
@@ -170,8 +198,8 @@ Every container is started with:
 
 Only two paths are writable and persistent:
 
-- `/workspace` — the bind-mounted project directory, mounted `readonly` when
-  `--ro` is given.
+- The project directory — bind-mounted at its host path, or at `/workspace`
+  under `--workspace`, and mounted `readonly` when `--ro` is given.
 - `/home/agent` — `~/.local/share/dev-agent/home` on the host, shared by every
   command.
 
@@ -185,9 +213,13 @@ outright, since mounting any of those would defeat the purpose.
 ## Git worktrees
 
 Agents like to work in a `git worktree`. The two files that link one back to
-its repository normally hold absolute paths, and inside the container those
-start with `/workspace` — a location that exists nowhere on the host, so the
-worktree is not a git repository at all once you step outside:
+its repository hold absolute paths, which only goes wrong when the two sides
+disagree about where the checkout is. Mirrored, they agree, and a worktree
+made in the container is an ordinary worktree out here.
+
+Under `--workspace` they do not agree. The links then start with `/workspace`
+— a location that exists nowhere on the host, so the worktree is not a git
+repository at all once you step outside:
 
 ```
 $ cd .claude/worktrees/readme-fix && git status
@@ -206,19 +238,20 @@ files then resolve from either side:
 Relative links need **git 2.48 or newer on the host as well**. An older git
 reads and writes such a worktree without complaint, but `git worktree list`
 reports it as `prunable`, and `git gc` acts on that and drops the
-registration. `dev-agent` warns at startup when the host git is too old; on
-Ubuntu, `ppa:git-core/ppa` carries a current build:
+registration. `dev-agent` warns at startup when the host git is too old and
+the run is not mirrored; on Ubuntu, `ppa:git-core/ppa` carries a current
+build:
 
 ```sh
 sudo add-apt-repository ppa:git-core/ppa && sudo apt update && sudo apt install git
 ```
 
-Worktrees created before this change keep their absolute paths. Repair them
-from the main checkout *inside* the container, where `/workspace` still means
-something:
+Worktrees left over from an older `/workspace` run keep their absolute paths.
+Repair them from the main checkout *inside* the container, where `/workspace`
+still means something:
 
 ```sh
-dev-agent bash ~/src/foo -c 'git worktree repair'
+dev-agent --workspace bash ~/src/foo -c 'git worktree repair'
 ```
 
 ## Extending the image
@@ -331,6 +364,7 @@ Environment variables:
 | `DEV_AGENT_IMAGE` | `dev-agent:ubuntu24` | Image to run. |
 | `DEV_AGENT_HOME` | `~/.local/share/dev-agent/home` | Host directory mounted at `/home/agent`. |
 | `DEV_AGENT_CONFIG` | `~/.config/dev-agent/config.yml` | Config file path. |
+| `DEV_AGENT_MIRROR` | `1` | Set to `0` to mount projects at `/workspace` by default, as `--workspace` does. |
 | `DEV_AGENT_SKIP_GIT_CHECK` | unset | Set to any value to silence the warning about a host git older than 2.48. |
 
 ## Removing persistent state
@@ -345,7 +379,10 @@ rm -rf ~/.local/share/dev-agent/home
 
 - Network access is not restricted. The agents need it to reach their APIs, and
   so does anything they run in your project.
-- Anything you mount at `/workspace` is fully writable by the agent. Use the
-  agent's own approval settings if you want a further check on that.
+- The container is told where the project sits on the host, since that is the
+  path it is mounted at. It still cannot read a thing outside the mount, but
+  if you would rather not hand over even the path, run with `--workspace`.
+- Anything you mount as the project directory is fully writable by the agent.
+  Use the agent's own approval settings if you want a further check on that.
 - Docker on Linux is assumed; the `--user` mapping and bind mount semantics
   differ on Docker Desktop for macOS and Windows.

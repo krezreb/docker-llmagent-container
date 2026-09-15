@@ -31,10 +31,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && git --version
 
-# The project is bind-mounted at /workspace, but on the host the same checkout
-# lives somewhere else entirely, so the absolute paths git normally writes into
-# a worktree's link files ("gitdir: /workspace/.git/worktrees/x") are dead ends
-# outside the container. Recording them relative to the checkout instead keeps
+# Under 'dev-agent --workspace' the project is bind-mounted at /workspace while
+# the same checkout lives somewhere else entirely on the host, so the absolute
+# paths git normally writes into a worktree's link files ("gitdir:
+# /workspace/.git/worktrees/x") are dead ends outside the container. Recording them relative to the checkout instead keeps
 # a worktree usable from both sides. Needs git 2.48 or newer at both ends: an
 # older git still reads and writes such a worktree, but reports it as prunable,
 # and `git gc` then drops its registration.

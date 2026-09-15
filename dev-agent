@@ -16,14 +16,22 @@ hostname="${hostname:-dev-agent}"
 usage() {
     cat >&2 <<'EOF'
 Usage:
-    dev-agent [--ro] [codex|claude|bash|tmux] [directory] [agent arguments...]
+    dev-agent [options] [codex|claude|bash|tmux] [directory] [agent arguments...]
 
 The command defaults to 'bash' and the directory to the current one.
 
+The project is mounted at the path it has on this host, and the agent starts
+there, so every path it prints is a path you can use out here too.
+
 Options:
-    --ro    Mount the project read-only, for investigating code without
-            changing it. It may be given before the command or before the
-            directory; everything from the directory on goes to the agent.
+    --ro        Mount the project read-only, for investigating code without
+                changing it.
+    --workspace Mount at /workspace instead, the way this wrapper used to.
+                DEV_AGENT_MIRROR=0 makes that the default.
+    --mirror    Mount at the host path, undoing DEV_AGENT_MIRROR=0.
+
+Options may be given before the command or before the directory; everything
+from the directory on goes to the agent.
 
 Examples:
     dev-agent
@@ -35,6 +43,7 @@ Examples:
     dev-agent tmux ~/src/foo
     dev-agent --ro claude ~/src/foo
     dev-agent claude --ro ~/src/foo
+    dev-agent --workspace claude ~/src/foo
 EOF
     exit 2
 }
@@ -51,10 +60,38 @@ die() {
 #
 ro=""
 
-while [[ "${1:-}" == "--ro" ]]; do
-    ro=1
-    shift
-done
+# The project is mirrored at its host path unless that is turned off, either
+# for one run with --workspace or for good with DEV_AGENT_MIRROR=0.
+mirror="${DEV_AGENT_MIRROR:-1}"
+
+case "$mirror" in
+    0|no|off|false) mirror="" ;;
+esac
+
+# Mirroring that was merely inherited gives way to /workspace when a path
+# cannot be mirrored; mirroring that was asked for by name is an error there.
+mirror_asked=""
+
+# Reads the leading wrapper options out of "$@" and reports in
+# 'flags_consumed' how many of them the caller should shift away.
+take_flags() {
+    flags_consumed=0
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --ro)        ro=1 ;;
+            --mirror)    mirror=1; mirror_asked=1 ;;
+            --workspace) mirror=""; mirror_asked="" ;;
+            *)           return ;;
+        esac
+
+        shift
+        flags_consumed=$((flags_consumed + 1))
+    done
+}
+
+take_flags "$@"
+shift "$flags_consumed"
 
 case "${1:-}" in
     codex|claude|bash|tmux)
@@ -76,10 +113,8 @@ case "${1:-}" in
         ;;
 esac
 
-while [[ "${1:-}" == "--ro" ]]; do
-    ro=1
-    shift
-done
+take_flags "$@"
+shift "$flags_consumed"
 
 # First argument is a directory if supplied.
 if [[ $# -gt 0 && -d "$1" ]]; then
@@ -112,13 +147,71 @@ case "$project" in
 esac
 
 #
+# Where the project appears inside the container.
+#
+# By default it is the path the project already has out here, so a file the
+# agent names, a frame in a stack trace or a link inside a worktree all point
+# at something that exists on both sides. /workspace, the older behaviour,
+# exists on no host, and every path coming out of the container then has to be
+# translated before it means anything.
+#
+# The price of mirroring is that the container learns your directory layout,
+# and that the agents key their per-project state by working directory, so a
+# project moved between the two modes starts that state afresh.
+#
+container_home="/home/agent"
+
+refuse_mirror() {
+    # Asked for by name, this is an error; merely inherited, /workspace is a
+    # perfectly good answer and the run carries on there.
+    if [[ -n "$mirror_asked" ]]; then
+        die "cannot mirror $project: $1; use --workspace"
+    fi
+
+    printf 'dev-agent: mounting %s at /workspace: %s\n' "$project" "$1" >&2
+    mirror=""
+}
+
+if [[ -n "$mirror" ]]; then
+    case "$project" in
+        # A mirrored path under the container's own home would nest inside the
+        # persistent home mount, and the two would fight over one directory.
+        "$container_home"|"$container_home"/*)
+            refuse_mirror "it would sit inside the container's home ($container_home)"
+            ;;
+        # Landing on one of the image's own top-level directories would hide
+        # the system that lives there.
+        /bin|/boot|/dev|/etc|/lib|/lib64|/opt|/proc|/run|/sbin|/srv|/sys|/tmp|/usr|/var)
+            refuse_mirror "it would hide the container's own $project"
+            ;;
+    esac
+fi
+
+if [[ -n "$mirror" ]]; then
+    mountpoint="$project"
+else
+    mountpoint="/workspace"
+fi
+
+# 'docker --mount' takes comma-separated key=value pairs, so a comma anywhere
+# in a path would be read as the start of another key.
+case "$project" in
+    *,*) die "path contains a comma, which docker --mount cannot express: $project" ;;
+esac
+
+#
 # Git worktrees made inside the container record their link paths relative to
 # the checkout, so they resolve both at /workspace and wherever the project
 # lives on this host. Only git 2.48 and newer understands those relative
 # paths: an older git here still reads and writes such a worktree, but calls
 # it prunable, and `git gc` then drops its registration.
 #
-if [[ -z "${DEV_AGENT_SKIP_GIT_CHECK:-}" ]] && command -v git >/dev/null 2>&1; then
+# None of that applies while the project is mirrored: the two sides agree on
+# the path already, so even an absolute link resolves on both, and the version
+# out here does not matter.
+#
+if [[ -z "$mirror" && -z "${DEV_AGENT_SKIP_GIT_CHECK:-}" ]] &&
+   command -v git >/dev/null 2>&1; then
     host_git="$(git --version | awk '{print $3}')"
 
     if [[ -n "$host_git" ]] &&
@@ -183,7 +276,7 @@ fi
 
 container_name="dev-agent-${agent}-$$"
 
-workspace_mount="type=bind,src=${project},dst=/workspace"
+workspace_mount="type=bind,src=${project},dst=${mountpoint}"
 
 if [[ -n "$ro" ]]; then
     workspace_mount+=",readonly"
@@ -216,13 +309,14 @@ docker_args=(
     --tmpfs /tmp:rw,nosuid,nodev,size=2g
     --tmpfs /run:rw,nosuid,nodev,size=64m
 
-    # The project directory the agent works in, read-only under --ro.
+    # The project directory the agent works in, at its host path unless
+    # --workspace says otherwise, and read-only under --ro.
     --mount "$workspace_mount"
 
     # Shared persistent auth/config, stored on the host.
     --mount "type=bind,src=${agent_home},dst=/home/agent"
 
-    --workdir /workspace
+    --workdir "$mountpoint"
 
     # Only explicitly selected environment values.
     --env HOME=/home/agent
