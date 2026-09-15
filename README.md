@@ -8,6 +8,73 @@ The point is blast radius. An agent running on the host can read your SSH keys,
 your browser profile and every repository you own. Here it sees one directory
 and nothing else.
 
+## Why not just the agent's own permissions?
+
+Both agents ship a permission system of their own, and a strong project-level
+`.claude/settings.json` looks like it already covers this ground:
+
+```json
+{
+  "sandbox": {
+    "enabled": true,
+    "filesystem": {
+      "denyRead": ["~/"],
+      "allowRead": ["."]
+    }
+  },
+  "permissions": {
+    "deny": [
+      "Read(~/.aws/**)",
+      "Read(~/.ssh/**)",
+      "Read(~/.gnupg/**)",
+      "Read(~/.config/gh/**)"
+    ]
+  }
+}
+```
+
+That is worth having. But look at what each half actually binds.
+
+The `deny` list is a set of patterns matched against the arguments of a named
+tool. `Read(~/.aws/**)` constrains the `Read` tool, and `cat ~/.aws/credentials`
+is the `Bash` tool — it never goes near `Read`, so those four lines have nothing
+to say about it. Covering that means denying command strings instead, and a
+shell has arbitrarily many spellings for the same read: `cat $HOME/.aws/*`,
+`sh -c`, a heredoc written to a file and then executed, a line in a Makefile, a
+test that happens to open the file, the install script of a dependency. That is
+not a winnable enumeration.
+
+The `sandbox` block is the stronger half: a genuine kernel-enforced boundary
+rather than a pattern match — Seatbelt on macOS, bubblewrap and seccomp on
+Linux — and it does apply to commands. It is still the agent's own sandbox,
+though:
+
+- **It is opt-out, per command.** When a command trips the sandbox it can be
+  re-run without one; the `Bash` tool takes a `dangerouslyDisableSandbox`
+  parameter for exactly that. A prompt you approve on a tired afternoon is the
+  whole enforcement.
+- **A bypass mode exists, and people use it.** `--dangerously-skip-permissions`
+  drops the permission layer wholesale. If your reason for wanting isolation is
+  to leave an agent working unattended, that is the mode you will reach for, and
+  it is the mode that discards these rules.
+- **The rules live in the tree being edited.** `.claude/settings.json` is a file
+  in the project — inside the one directory the agent is unambiguously allowed
+  to write.
+- **Everything still runs as you**, with your uid and the environment it was
+  launched from. Every API key in that shell is inherited by the agent and by
+  every process it spawns.
+
+The container is not answering the same question better; it is not answering it
+at all. `~/.aws` is not in the container's mount namespace, so there is no file
+to open, no pattern to defeat and no flag to flip. The mounts are chosen on the
+host, by you, before the container starts, and nothing inside can change them.
+`--dangerously-skip-permissions` in here costs you one project directory instead
+of your entire home.
+
+The two are complements rather than alternatives. The container decides what
+exists; the agent's own settings decide what it may do with what exists. Keep
+both.
+
 ## What you get
 
 - **Ubuntu 24.04 image** with both agents preinstalled globally via npm, plus the
