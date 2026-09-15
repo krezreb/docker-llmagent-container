@@ -157,8 +157,25 @@ DEV_AGENT_IMAGE=dev-agent:rust dev-agent claude .
 ```
 
 `make images` builds every `images/*.Dockerfile`. Each variant depends on the base, so
-a base change is picked up automatically. `rust` and `php` are there as examples to
-copy, not a catalogue to maintain.
+a base change is picked up automatically. Name a variant anything except an existing
+make target (`install`, `build-image`, `images`).
+
+These ship, and are meant to be copied and edited rather than maintained as a
+catalogue:
+
+| Variant | Contents |
+| --- | --- |
+| `go` | `golang-go` |
+| `java` | `default-jdk`, `maven` |
+| `php` | `php-cli`, `php-xml`, `php-mbstring`, `composer` |
+| `ruby` | `ruby-full` |
+| `rust` | `rustc`, `cargo` from apt |
+| `rustup` | current Rust via the rustup installer |
+
+Ubuntu pins compilers hard — apt's `rustc` is 1.75, years behind. `rustup.Dockerfile`
+is the escape hatch, and the same shape works for nvm, sdkman, rbenv or pyenv: run the
+installer at build time into a system path such as `/opt`, then point the tool's cache
+variable at `/home/agent`.
 
 To make a project always use its own image, export `DEV_AGENT_IMAGE` from a shell
 alias, a direnv `.envrc`, or a small script in the project.
@@ -167,14 +184,20 @@ A derived image has to leave the sandbox intact, since the flags come from the w
 and not from the image:
 
 - **Install at build time only.** The container runs `--read-only`, so anything that
-  writes outside `/tmp`, `/run` or `/home/agent` at runtime will fail.
+  writes outside `/tmp`, `/run` or `/home/agent` at runtime will fail. A tool that
+  writes to a system directory needs an `ENV` redirecting it under `/home/agent`:
+  `GEM_HOME` for `gem`, which otherwise uses `/var/lib/gems`, and `CARGO_HOME` for
+  `cargo`, which needs a writable registry. See `images/ruby.Dockerfile` and
+  `images/rustup.Dockerfile`.
 - **Don't set `USER` or change `HOME`.** The wrapper passes `--user` and
-  `HOME=/home/agent`, and `/home/agent` is a bind mount from your host.
+  `HOME=/home/agent`, and `/home/agent` is a bind mount from your host. It does not
+  exist during the build, so an installer that inspects `HOME` may need it overridden
+  for that one `RUN`, as rustup does.
 - **Don't remove the agents.** `dev-agent` runs `codex`, `claude` or `bash` as the
   container command.
 
-Toolchain caches such as `~/.cargo` or `~/.composer` land in the per-command home under
-`~/.local/share/dev-agent/`, so they persist between runs.
+Toolchain caches such as `~/.cargo`, `~/.m2` or `~/go` land in the per-command home
+under `~/.local/share/dev-agent/`, so they persist between runs.
 
 ## Configuration
 
