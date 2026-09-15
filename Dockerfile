@@ -9,8 +9,6 @@ RUN apt-get update \
         git \
         jq \
         less \
-        nodejs \
-        npm \
         openssh-client \
         python3 \
         python3-pip \
@@ -21,8 +19,15 @@ RUN apt-get update \
         procps vim tmux \
     && rm -rf /var/lib/apt/lists/*
 
+# Node.js from NodeSource; Ubuntu 24.04 only ships Node 18 / npm 9.
+ARG NODE_MAJOR=24
+RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install the coding agents into the immutable image.
 RUN npm install -g \
+      npm@11 \
       @openai/codex \
       @anthropic-ai/claude-code \
     && npm cache clean --force
