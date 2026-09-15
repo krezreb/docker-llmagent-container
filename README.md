@@ -19,6 +19,55 @@ and nothing else.
   credentials.
 - **A config file** for any extra host paths you want the agent to see.
 
+## Prerequisites
+
+Docker Engine, `make` and `git`. Rootless Docker works too.
+
+### Linux
+
+Install Docker Engine from Docker's own repository, not the distribution package —
+the distro version is usually old:
+
+```sh
+curl -fsSL https://get.docker.com | sh
+```
+
+Then add yourself to the `docker` group so `dev-agent` can talk to the daemon without
+`sudo`, and start a new login session for it to take effect:
+
+```sh
+sudo usermod -aG docker "$USER"
+newgrp docker
+docker run --rm hello-world
+```
+
+Membership of the `docker` group is equivalent to root on the host. If that is not
+acceptable, use [rootless mode](https://docs.docker.com/engine/security/rootless/)
+instead; `dev-agent` needs no changes for it.
+
+### WSL2
+
+Two options, both fine:
+
+- **Docker Desktop for Windows** with WSL integration enabled for your distribution
+  (Settings → Resources → WSL integration). `docker` then works from inside WSL.
+- **Docker Engine installed directly in the WSL distribution**, using the Linux steps
+  above. With systemd enabled in `/etc/wsl.conf` the daemon starts on its own;
+  otherwise start it with `sudo service docker start`.
+
+  ```ini
+  # /etc/wsl.conf
+  [boot]
+  systemd=true
+  ```
+
+Keep your projects on the Linux filesystem, under `/home/you/...`, not on `/mnt/c`.
+Bind mounts from `/mnt/c` are slow and lose Unix ownership and permissions, which
+breaks the `--user` mapping the sandbox relies on.
+
+WSL1 is not supported; check with `wsl -l -v` on the Windows side and convert with
+`wsl --set-version <distro> 2`.
+
 ## Install
 
 ```sh
@@ -59,7 +108,7 @@ dev-agent bash ~/src/foo
 ```
 
 First run of each agent will prompt you to log in. The credentials are written
-to that agent's persistent volume, so you only do this once.
+to that agent's persistent home on the host, so you only do this once.
 
 ## Sandbox details
 
