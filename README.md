@@ -88,6 +88,45 @@ host.
 The wrapper refuses to mount `/`, `/home`, `/root` or your home directory
 outright, since mounting any of those would defeat the purpose.
 
+## Extending the image
+
+The image is a base to build on. Put a Dockerfile in `images/`, build it, and point
+`DEV_AGENT_IMAGE` at the result:
+
+```dockerfile
+# images/rust.Dockerfile
+FROM dev-agent:ubuntu24
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends rustc cargo \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+```sh
+make rust                                          # builds dev-agent:rust
+DEV_AGENT_IMAGE=dev-agent:rust dev-agent claude .
+```
+
+`make images` builds every `images/*.Dockerfile`. Each variant depends on the base, so
+a base change is picked up automatically. `rust` and `php` are there as examples to
+copy, not a catalogue to maintain.
+
+To make a project always use its own image, export `DEV_AGENT_IMAGE` from a shell
+alias, a direnv `.envrc`, or a small script in the project.
+
+A derived image has to leave the sandbox intact, since the flags come from the wrapper
+and not from the image:
+
+- **Install at build time only.** The container runs `--read-only`, so anything that
+  writes outside `/tmp`, `/run` or `/home/agent` at runtime will fail.
+- **Don't set `USER` or change `HOME`.** The wrapper passes `--user` and
+  `HOME=/home/agent`, and `/home/agent` is a bind mount from your host.
+- **Don't remove the agents.** `dev-agent` runs `codex`, `claude` or `bash` as the
+  container command.
+
+Toolchain caches such as `~/.cargo` or `~/.composer` land in the per-command home under
+`~/.local/share/dev-agent/`, so they persist between runs.
+
 ## Configuration
 
 `~/.config/dev-agent/config.yml` lists extra host paths to expose, one per line:
