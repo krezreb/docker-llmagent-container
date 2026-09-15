@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+IMAGE="${DEV_AGENT_IMAGE:-dev-agent:ubuntu24}"
+
+usage() {
+    cat >&2 <<'EOF'
+Usage:
+    dev-agent codex [directory] [codex arguments...]
+    dev-agent claude [directory] [claude arguments...]
+    dev-agent bash [directory] [bash arguments...]
+
+Examples:
+    dev-agent codex .
+    dev-agent claude .
+    dev-agent codex ~/src/foo
+    dev-agent claude ~/src/foo --model opus
+    dev-agent bash ~/src/foo
+EOF
+    exit 2
+}
+
+die() {
+    printf 'dev-agent: %s\n' "$*" >&2
+    exit 1
+}
+
+[[ $# -ge 1 ]] || usage
+
+agent="$1"
+shift
+
+case "$agent" in
+    codex|claude|bash)
+        ;;
+    *)
+        die "agent must be 'codex', 'claude' or 'bash'"
+        ;;
+esac
+
+# First argument is a directory if supplied.
+if [[ $# -gt 0 && -d "$1" ]]; then
+    project="$1"
+    shift
+else
+    project="."
+fi
+
+project="$(realpath -e "$project")"
+
+[[ -d "$project" ]] || die "not a directory: $project"
+
+#
+# Prevent especially nasty accidental mounts.
+#
+case "$project" in
+    /)
+        die "refusing to mount /"
+        ;;
+    "$HOME")
+        die "refusing to mount your entire home directory"
+        ;;
+    /home)
+        die "refusing to mount /home"
+        ;;
+    /root)
+        die "refusing to mount /root"
+        ;;
+esac
+
+#
+# Persistent HOME, kept on the host so it can be backed up and inspected.
+#
+# Each command gets its own home so that compromising one doesn't
+# automatically expose another's login state.
+#
+agent_home="${DEV_AGENT_HOME:-$HOME/.local/share/dev-agent}/$agent"
+mkdir -p "$agent_home"
+chmod 700 "$agent_home"
+
+#
+# Optional extra mounts, from a config file of the form:
+#
+#   mounts:
+#     - ~/.gitconfig:/home/agent/.gitconfig:ro
+#     - /data:/data
+#
+config="${DEV_AGENT_CONFIG:-$HOME/.config/dev-agent/config.yml}"
+
+extra_mounts=()
+
+if [[ -f "$config" ]]; then
+    while IFS= read -r entry; do
+        IFS=: read -r src dst opt <<<"$entry"
+
+        [[ -n "$src" && -n "$dst" ]] ||
+            die "$config: mount must be src:dst[:ro], got: $entry"
+
+        src="${src/#\~/$HOME}"
+        src="$(realpath -e "$src" 2>/dev/null)" ||
+            die "$config: mount source does not exist: $entry"
+
+        case "$opt" in
+            "")   extra_mounts+=(--mount "type=bind,src=${src},dst=${dst}") ;;
+            ro)   extra_mounts+=(--mount "type=bind,src=${src},dst=${dst},readonly") ;;
+            *)    die "$config: unknown mount option '$opt' in: $entry" ;;
+        esac
+    done < <(awk '
+        /^mounts:/                  { in_mounts = 1; next }
+        in_mounts && /^[^[:space:]]/ { in_mounts = 0 }
+        in_mounts && /^[[:space:]]*-[[:space:]]/ {
+            sub(/^[[:space:]]*-[[:space:]]*/, "")
+            sub(/[[:space:]]+#.*$/, "")
+            gsub(/^["'"'"']|["'"'"']$/, "")
+            if ($0 != "") print
+        }
+    ' "$config")
+fi
+
+container_name="dev-agent-${agent}-$$"
+
+docker_args=(
+    run
+    --rm
+    --interactive
+    --tty
+
+    --user "$(id -u):$(id -g)"
+
+    --name "$container_name"
+    --hostname "dev-agent"
+
+    # Root filesystem cannot be modified.
+    --read-only
+
+    # Don't give the process Linux capabilities.
+    --cap-drop=ALL
+
+    # Prevent gaining privileges via setuid/etc.
+    --security-opt=no-new-privileges:true
+
+    # Basic resource / fork-bomb protection.
+    --pids-limit=2048
+
+    # Scratch areas required by normal Unix tooling.
+    --tmpfs /tmp:rw,nosuid,nodev,size=2g
+    --tmpfs /run:rw,nosuid,nodev,size=64m
+
+    # The project directory the agent works in.
+    --mount "type=bind,src=${project},dst=/workspace"
+
+    # Per-agent persistent auth/config, stored on the host.
+    --mount "type=bind,src=${agent_home},dst=/home/agent"
+
+    --workdir /workspace
+
+    # Only explicitly selected environment values.
+    --env HOME=/home/agent
+    --env "TERM=${TERM:-xterm-256color}"
+
+)
+
+docker_args+=("${extra_mounts[@]}")
+docker_args+=("$IMAGE" "$agent" "$@")
+
+exec docker "${docker_args[@]}"

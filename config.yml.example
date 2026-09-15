@@ -1,0 +1,9 @@
+# ~/.config/dev-agent/config.yml
+#
+# Extra host paths to expose inside the container, one per line, as
+#   - source:destination[:ro]
+# "~" is expanded. The source must already exist.
+mounts:
+  # - ~/.gitconfig:/home/agent/.gitconfig:ro
+  # - ~/.ssh:/home/agent/.ssh:ro
+  # - ~/src/shared-lib:/shared:ro
