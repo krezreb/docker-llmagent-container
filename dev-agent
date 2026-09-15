@@ -3,6 +3,16 @@ set -euo pipefail
 
 IMAGE="${DEV_AGENT_IMAGE:-dev-agent:ubuntu24}"
 
+# The hostname mirrors the image, so the shell prompt names the variant you are
+# in. A hostname may only hold alphanumerics and hyphens, so the ':' of the tag
+# and any registry slashes and dots collapse to '-': dev-agent:php becomes
+# dev-agent-php, and the 63-character limit is enforced.
+hostname="${IMAGE//[^[:alnum:]-]/-}"
+hostname="${hostname:0:63}"
+while [[ "$hostname" == -* ]]; do hostname="${hostname#-}"; done
+while [[ "$hostname" == *- ]]; do hostname="${hostname%-}"; done
+hostname="${hostname:-dev-agent}"
+
 usage() {
     cat >&2 <<'EOF'
 Usage:
@@ -134,7 +144,7 @@ docker_args=(
     --user "$(id -u):$(id -g)"
 
     --name "$container_name"
-    --hostname "dev-agent"
+    --hostname "$hostname"
 
     # Root filesystem cannot be modified.
     --read-only

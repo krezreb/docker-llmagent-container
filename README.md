@@ -127,6 +127,7 @@ Every container is started with:
 | `--user $(id -u):$(id -g)` | Files created in the project keep your ownership, not root's. |
 | `--tmpfs /tmp`, `--tmpfs /run` | Writable scratch space (`nosuid,nodev`), discarded on exit. |
 | `--rm` | Container is destroyed when the agent exits. |
+| `--hostname` | Taken from the image, so the shell prompt names the variant: `dev-agent:php` gives `agent@dev-agent-php`. Characters a hostname cannot hold, such as the `:` before the tag, become `-`. |
 
 Only two paths are writable and persistent:
 
@@ -162,7 +163,20 @@ DEV_AGENT_IMAGE=dev-agent:rust dev-agent claude .
 
 `make images` builds every `images/*.Dockerfile`. Each variant depends on the base, so
 a base change is picked up automatically. Name a variant anything except an existing
-make target (`install`, `build-image`, `images`).
+make target (`install`, `build-image`, `images`, `aliases`).
+
+`make aliases` saves typing `DEV_AGENT_IMAGE=` by hand — it writes one alias per
+variant to `~/.bashrc`:
+
+```sh
+make aliases
+source ~/.bashrc
+dev-agent-php claude .       # DEV_AGENT_IMAGE=dev-agent:php dev-agent claude .
+```
+
+The aliases go in a marked block, so re-running after adding a variant rewrites the
+block rather than appending a second copy, and deleting the block removes them all.
+`make aliases BASHRC=~/.bash_aliases` writes somewhere else.
 
 These ship, and are meant to be copied and edited rather than maintained as a
 catalogue:
@@ -171,7 +185,7 @@ catalogue:
 | --- | --- |
 | `go` | `golang-go` |
 | `java` | `default-jdk`, `maven` |
-| `php` | `php-cli`, `php-xml`, `php-mbstring`, `composer` |
+| `php` | PHP 8.5 from the `ondrej/php` PPA (`cli`, `xml`, `mbstring`, `curl`, `zip`) plus upstream `composer` |
 | `ruby` | `ruby-full` |
 | `rust` | `rustc`, `cargo` from apt |
 | `rustup` | current Rust via the rustup installer |
@@ -180,6 +194,16 @@ Ubuntu pins compilers hard — apt's `rustc` is 1.75, years behind. `rustup.Dock
 is the escape hatch, and the same shape works for nvm, sdkman, rbenv or pyenv: run the
 installer at build time into a system path such as `/opt`, then point the tool's cache
 variable at `/home/agent`.
+
+The same applies to PHP: Ubuntu 24.04 ships 8.3 only, so `php.Dockerfile` adds the
+`ondrej/php` PPA. `PHP_VERSIONS` is a space-separated build argument; the first entry
+becomes the default `php`, and any others stay callable under their own names.
+
+```sh
+make php                                                    # PHP 8.5
+docker build -t dev-agent:php -f images/php.Dockerfile \
+    --build-arg PHP_VERSIONS="8.5 8.4 8.3" .                # php, php8.4, php8.3
+```
 
 To make a project always use its own image, export `DEV_AGENT_IMAGE` from a shell
 alias, a direnv `.envrc`, or a small script in the project.
