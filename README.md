@@ -87,19 +87,20 @@ make build-image
 ## Usage
 
 ```
-dev-agent codex  [directory] [codex arguments...]
-dev-agent claude [directory] [claude arguments...]
-dev-agent bash   [directory] [bash arguments...]
+dev-agent [codex|claude|bash] [directory] [agent arguments...]
 ```
 
 `bash` drops you into a shell in the same sandbox, which is useful for
 inspecting the image or running a command in the container by hand. To poke at
 an agent's own home from that shell, mount it: `- ~/.local/share/dev-agent/codex:/codex`.
 
-The directory argument is optional and defaults to the current directory. Any
-remaining arguments are passed straight through to the agent.
+Both leading arguments are optional: the command defaults to `bash` and the
+directory to the current one, so a bare `dev-agent` is the same as
+`dev-agent bash .`. Any remaining arguments are passed straight through to the
+agent.
 
 ```sh
+dev-agent
 dev-agent codex .
 dev-agent claude .
 dev-agent codex ~/src/foo
