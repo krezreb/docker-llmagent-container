@@ -25,13 +25,11 @@ Worth having, but those patterns restrict a *tool*, not a *file*. The model can 
 bypass by invoking a shell command and running `cat ~/.aws/credentials`
 
 The `sandbox` block is a real kernel boundary, but it is
-opt-out per command, `--dangerously-skip-permissions` discards the whole layer,
-and the rules live in a file inside the one directory the agent may write.
+opt-out per command, `--dangerously-skip-permissions` can bypass it,
+and the rules live in a file inside the one directory the agent may write 🧌.
 
 This container removes the ability for the LLM to access files you don't want it to.
-`~/.aws` is not in the container's mount namespace, so there is no file to open
-and no pattern to defeat. The mounts are chosen on the host, before start, and
-nothing inside can change them.
+Only the files you choose are in the container's filesystem, and nothing inside can change them.
 
 These two security measures are complements. The container decides what exists; the agent's settings
 decide what it may do with what exists. Keep both.
