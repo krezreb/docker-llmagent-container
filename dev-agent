@@ -77,10 +77,10 @@ esac
 #
 # Persistent HOME, kept on the host so it can be backed up and inspected.
 #
-# Each command gets its own home so that compromising one doesn't
-# automatically expose another's login state.
+# Shared by every command, so logins and toolchain caches are visible
+# whichever one you start.
 #
-agent_home="${DEV_AGENT_HOME:-$HOME/.local/share/dev-agent}/$agent"
+agent_home="${DEV_AGENT_HOME:-$HOME/.local/share/dev-agent/home}"
 mkdir -p "$agent_home"
 chmod 700 "$agent_home"
 
@@ -155,7 +155,7 @@ docker_args=(
     # The project directory the agent works in.
     --mount "type=bind,src=${project},dst=/workspace"
 
-    # Per-agent persistent auth/config, stored on the host.
+    # Shared persistent auth/config, stored on the host.
     --mount "type=bind,src=${agent_home},dst=/home/agent"
 
     --workdir /workspace

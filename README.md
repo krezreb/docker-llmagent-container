@@ -14,9 +14,9 @@ and nothing else.
   tooling they expect (git, curl, jq, ripgrep, python3, build-essential).
 - **`dev-agent` wrapper script** that starts a container with a hardened set of
   Docker flags and bind-mounts exactly one project directory at `/workspace`.
-- **Separate persistent home per command** under `~/.local/share/dev-agent/`, so
-  login state survives between runs and neither agent can read the other's
-  credentials.
+- **One persistent home** at `~/.local/share/dev-agent/home`, shared by every
+  command, so login state and toolchain caches survive between runs and are the
+  same whichever command you start.
 - **A config file** for any extra host paths you want the agent to see.
 
 ## Prerequisites
@@ -93,8 +93,8 @@ dev-agent [codex|claude|bash|tmux] [directory] [agent arguments...]
 `bash` drops you into a shell in the same sandbox, which is useful for
 inspecting the image or running a command in the container by hand. `tmux` does
 the same inside a tmux session, so you can run an agent and a shell side by side
-in one container. To poke at an agent's own home from either, mount it:
-`- ~/.local/share/dev-agent/codex:/codex`.
+in one container. Every command shares the same `/home/agent`, so a login done
+under `claude` is already there under `bash` or `tmux`.
 
 Both leading arguments are optional: the command defaults to `bash` and the
 directory to the current one, so a bare `dev-agent` is the same as
@@ -131,8 +131,8 @@ Every container is started with:
 Only two paths are writable and persistent:
 
 - `/workspace` — the bind-mounted project directory.
-- `/home/agent` — `~/.local/share/dev-agent/<command>` on the host, so `codex`,
-  `claude` and `bash` each get their own.
+- `/home/agent` — `~/.local/share/dev-agent/home` on the host, shared by every
+  command.
 
 The environment is not inherited from your shell. Only `HOME` and `TERM` are
 passed in, so API keys and other secrets in your host environment stay on the
@@ -200,8 +200,8 @@ and not from the image:
 - **Don't remove the agents.** `dev-agent` runs `codex`, `claude` or `bash` as the
   container command.
 
-Toolchain caches such as `~/.cargo`, `~/.m2` or `~/go` land in the per-command home
-under `~/.local/share/dev-agent/`, so they persist between runs.
+Toolchain caches such as `~/.cargo`, `~/.m2` or `~/go` land in the shared home at
+`~/.local/share/dev-agent/home`, so they persist between runs.
 
 ## Configuration
 
@@ -226,7 +226,7 @@ Environment variables:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `DEV_AGENT_IMAGE` | `dev-agent:ubuntu24` | Image to run. |
-| `DEV_AGENT_HOME` | `~/.local/share/dev-agent` | Parent directory of the per-command homes. |
+| `DEV_AGENT_HOME` | `~/.local/share/dev-agent/home` | Host directory mounted at `/home/agent`. |
 | `DEV_AGENT_CONFIG` | `~/.config/dev-agent/config.yml` | Config file path. |
 
 ## Removing persistent state
@@ -234,9 +234,7 @@ Environment variables:
 To force a fresh login, or to wipe an agent's config:
 
 ```sh
-rm -rf ~/.local/share/dev-agent/codex
-rm -rf ~/.local/share/dev-agent/claude
-rm -rf ~/.local/share/dev-agent/bash
+rm -rf ~/.local/share/dev-agent/home
 ```
 
 ## Caveats
