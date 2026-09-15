@@ -21,20 +21,19 @@ deny reads of the obvious secrets:
 }
 ```
 
-Worth having, but those patterns bind a *tool*, not a *file*. `cat
-~/.aws/credentials` is the `Bash` tool and never goes near `Read`, so the deny
-list has nothing to say about it — and a shell has arbitrarily many spellings
-for the same read (`$HOME`, `sh -c`, a heredoc, a Makefile line, a dependency's
-install script). The `sandbox` block is a real kernel boundary, but it is
+Worth having, but those patterns restrict a *tool*, not a *file*. The model can simply
+bypass by invoking a shell command and running `cat ~/.aws/credentials`
+
+The `sandbox` block is a real kernel boundary, but it is
 opt-out per command, `--dangerously-skip-permissions` discards the whole layer,
 and the rules live in a file inside the one directory the agent may write.
 
-The container isn't a better answer to that question; it removes the question.
+This container removes the ability for the LLM to access files you don't want it to.
 `~/.aws` is not in the container's mount namespace, so there is no file to open
 and no pattern to defeat. The mounts are chosen on the host, before start, and
 nothing inside can change them.
 
-The two are complements. The container decides what exists; the agent's settings
+These two security measures are complements. The container decides what exists; the agent's settings
 decide what it may do with what exists. Keep both.
 
 ## What you get
