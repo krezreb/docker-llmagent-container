@@ -114,7 +114,7 @@ proc run {cmd {wait 2}} {
 # out plain while the host half is green. send_user writes straight into the
 # recording without going through any shell, so the same dark green can be
 # switched on around the typing and off again once the command runs.
-proc run_nested {cmd {wait 3}} {
+proc run_nested {cmd {wait 1.5}} {
     send_user "\033\[32m"
     type_human $cmd
     pump 0.5
@@ -187,13 +187,13 @@ run_nested "dev-agent claude ." 0
 # land garbled. Match the banner, not the U+276F input box: the shell prompt is
 # that same character, so the box is not a reliable "the TUI is up" signal.
 expect -timeout 60 -ex "Claude Code" {} timeout {}
-pump 1
+pump 0.3
 
 # Type a prompt but never send it: no API call, no answer to wait for, and
 # nothing to trim out of the recording afterwards. Three times slower than the
 # shell, because the TUI repaints the whole frame on every keystroke.
 type_human "write horse tinder" 3
-pump 3
+pump 0.5
 
 # Leave Claude. It answers the first ctrl-C with "Press Ctrl-C again to exit"
 # and forgets that offer in well under a second, so the second tap has to
@@ -214,11 +214,11 @@ for {set i 0} {$i < 5} {incr i} {
 pump 2
 
 # --- read-only mount: the project cannot be written ---------------------
-run_nested "dev-agent bash --ro" 6
-run_nested "touch scratch.txt"
+run_nested "dev-agent bash --ro  # read only workspace" 2
+run_nested "touch scratch.txt  # NOPE"
 # No sudo in the image and --cap-drop=ALL on the container, so there is no
 # route to root: "sudo: command not found".
-run_nested "sudo apt install nmap"
+run_nested "sudo apt install nmap  # NOPE"
 # /home/agent and /tmp stay writable, so the agent keeps its own state
 run_nested "touch /tmp/fine && echo '/tmp still writable'"
 pump 3
