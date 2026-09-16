@@ -114,6 +114,37 @@ To build the image alone:
 make build-image
 ```
 
+## Keeping the agents current
+
+Both agents are installed from npm, and that layer would otherwise stay cached
+until something beneath it changed — a rebuild a year from now could still
+hand you the pair that was current on the day you first built. `make
+build-image` asks the registry what `latest` means today and passes the two
+versions in as build arguments, so the layer is rebuilt when, and only when,
+one of them publishes. Everything below it stays cached, which makes the
+refresh one `npm install` rather than a whole distribution:
+
+```sh
+make build-image      # today's claude-code and codex
+make install          # the same, plus the wrapper
+```
+
+Name a version to pin one instead:
+
+```sh
+make build-image CLAUDE_CODE_VERSION=2.1.267 CODEX_VERSION=0.154.0
+```
+
+And to distrust the cache from the base image down — a new apt package, a
+rebuilt `ubuntu:26.04` — there is the blunt instrument:
+
+```sh
+make build-image DOCKER_BUILD_FLAGS=--no-cache
+```
+
+If the registry cannot be reached, both versions fall back to `latest`, which
+leaves docker's cache in charge and lets an offline build go through.
+
 ## Usage
 
 ```

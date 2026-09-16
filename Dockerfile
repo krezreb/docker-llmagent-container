@@ -36,11 +36,21 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && rm -rf /var/lib/apt/lists/*
 
 # Install the coding agents into the immutable image.
+#
+# Both move fast, and an unpinned 'npm install' would be cached for as long as
+# nothing above it changes: a rebuild months from now would quietly ship the
+# pair that was current the day the layer was first built. The Makefile passes
+# the versions npm calls 'latest' at build time, which gives this layer a cache
+# key that changes exactly when one of them publishes. Left at 'latest' — a
+# plain 'docker build .' — it is whatever docker already has.
+ARG CLAUDE_CODE_VERSION=latest
+ARG CODEX_VERSION=latest
 RUN npm install -g \
       npm@11 \
-      @openai/codex \
-      @anthropic-ai/claude-code \
-    && npm cache clean --force
+      "@openai/codex@${CODEX_VERSION:-latest}" \
+      "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION:-latest}" \
+    && npm cache clean --force \
+    && npm ls -g --depth=0
 
 RUN echo "alias ll='ls -alF'" >> /etc/bash.bashrc
 
