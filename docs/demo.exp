@@ -1,0 +1,142 @@
+#!/usr/bin/expect -f
+#
+# Scripted version of the demo in docs/README.md.
+#
+# Record it with asciinema:
+#
+#   asciinema rec -c "expect docs/demo.exp" docs/demo.cast
+#
+# Convert the cast to a gif with agg:
+#
+#   docker run --rm -v "$PWD/docs:/data" ghcr.io/asciinema/agg:latest demo.cast demo.gif
+#
+# It runs the real commands: it clones the repository into a temporary
+# directory, builds the image, installs the wrapper to ~/.local/bin and writes
+# the alias block to ~/.bashrc.
+
+# Typing speed: 60ms per character, jittered by +/- jitter seconds, with a
+# longer beat after each space. `send -h` and send_human are the built-in way
+# to do this, but a plain per-character loop is one line longer and always
+# works, whatever the local expect does with its Weibull distribution.
+set char_delay 0.06
+set jitter 0.03
+set word_delay 0.12
+set prompt "dev$ "
+
+# `make build-image` pulls a base image and installs the agents.
+set timeout 1200
+
+proc pause {{s 2}} {
+    sleep $s
+}
+
+# Send a string one character at a time, so the recording shows it being typed.
+proc type_human {text} {
+    global char_delay jitter word_delay
+    foreach c [split $text ""] {
+        send -- $c
+        if {$c eq " "} {
+            sleep $word_delay
+        } else {
+            sleep [expr {$char_delay + (rand() * 2 - 1) * $jitter}]
+        }
+    }
+}
+
+# Type a command the way a person would, run it and wait for the shell prompt.
+proc run {cmd {wait 2}} {
+    global prompt
+    type_human $cmd
+    pause 0.5
+    send "\r"
+    expect -ex $prompt
+    pause $wait
+}
+
+# Type a command inside a nested shell (the container, Claude Code), where the
+# prompt is not ours to match on. Wait a fixed time instead.
+proc run_nested {cmd {wait 3}} {
+    type_human $cmd
+    pause 0.5
+    send "\r"
+    pause $wait
+}
+
+# Claude Code asks "do you trust the files in this folder?" the first time it
+# opens a directory. It records the answer in ~/.claude.json inside the
+# container's persistent home, so seed the answer before recording and the
+# prompt never appears. dev-agent mounts the project at its host path, which is
+# the path Claude keys on.
+proc trust_dir {path} {
+    set home $::env(HOME)/.local/share/dev-agent/home
+    if {[info exists ::env(DEV_AGENT_HOME)]} {
+        set home $::env(DEV_AGENT_HOME)
+    }
+    file mkdir $home
+    exec python3 -c {
+import json, os, sys
+home, path = sys.argv[1], sys.argv[2]
+f = os.path.join(home, ".claude.json")
+try:
+    with open(f) as fh:
+        d = json.load(fh)
+except (OSError, ValueError):
+    d = {}
+d.setdefault("projects", {}).setdefault(path, {})["hasTrustDialogAccepted"] = True
+with open(f, "w") as fh:
+    json.dump(d, fh, indent=2)
+os.chmod(f, 0o600)
+} $home $path
+}
+
+# -noecho: without it expect prints the spawn command line, PS1 and all.
+# No quotes around $prompt: in Tcl a quote mid-word is a literal character, so
+# PS1="$prompt" would put the quotes in the prompt itself. Tcl does not split
+# words on spaces, so the trailing space survives on its own.
+spawn -noecho env PS1=$prompt bash --norc --noprofile
+expect -ex $prompt
+
+set workdir /tmp/dev-agent-demo
+file delete -force $workdir
+run "mkdir -p $workdir && cd $workdir"
+
+# --- the daemon is up ---------------------------------------------------
+run "docker --version"
+
+# --- get the repository -------------------------------------------------
+run "git clone https://github.com/krezreb/docker-llmagent-container.git"
+run "cd docker-llmagent-container"
+
+# --- build the default image --------------------------------------------
+run "make build-image"
+
+# --- install the wrapper and starter config -----------------------------
+run "make install"
+
+# --- one alias per images/*.Dockerfile ----------------------------------
+run "make aliases"
+
+trust_dir $workdir/docker-llmagent-container
+
+# --- Claude Code, inside the sandbox ------------------------------------
+# `clear` rides along with the command so the screen wipes without a bare
+# `clear` being typed on camera.
+run_nested "clear && dev-agent claude ." 8
+run_nested "/exit" 2
+expect -ex $prompt
+pause 2
+
+# --- read-only mount: the project cannot be written ---------------------
+run_nested "clear && dev-agent bash --ro" 6
+run_nested "touch scratch.txt"
+run_nested "echo hacked >> README.md"
+# /home/agent and /tmp stay writable, so the agent keeps its own state
+run_nested "touch /tmp/fine && echo '/tmp still writable'"
+run_nested "exit" 2
+expect -ex $prompt
+pause 3
+
+# Close the pty instead of typing `exit`, so the recording does not end on a
+# stray command. asciinema stops when this script does.
+close
+wait
