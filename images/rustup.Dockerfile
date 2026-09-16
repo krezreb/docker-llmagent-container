@@ -1,4 +1,4 @@
-FROM dev-agent:ubuntu24
+FROM dev-agent:ubuntu26
 
 # Install the toolchain into an immutable system location.
 #

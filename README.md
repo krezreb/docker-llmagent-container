@@ -36,7 +36,7 @@ decide what it may do with what exists. Keep both.
 
 ## What you get
 
-- **Ubuntu 24.04 image** with both agents preinstalled globally via npm, plus the
+- **Ubuntu 26.04 LTS image** with both agents preinstalled globally via npm, plus the
   tooling they expect (git, curl, jq, ripgrep, python3, build-essential).
 - **`dev-agent` wrapper script** that starts a container with a hardened set of
   Docker flags and bind-mounts exactly one project directory, at the very path
@@ -104,7 +104,7 @@ WSL1 is not supported; check with `wsl -l -v` on the Windows side and convert wi
 make install
 ```
 
-This builds the image (`dev-agent:ubuntu24`), installs the wrapper to
+This builds the image (`dev-agent:ubuntu26`), installs the wrapper to
 `~/.local/bin/dev-agent`, and writes a starter `~/.config/dev-agent/config.yml`
 if you don't already have one. Make sure `~/.local/bin` is on your `PATH`.
 
@@ -261,7 +261,7 @@ The image is a base to build on. Put a Dockerfile in `images/`, build it, and po
 
 ```dockerfile
 # images/rust.Dockerfile
-FROM dev-agent:ubuntu24
+FROM dev-agent:ubuntu26
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends rustc cargo \
@@ -297,24 +297,25 @@ catalogue:
 | --- | --- |
 | `go` | `golang-go` |
 | `java` | `default-jdk`, `maven` |
-| `php` | PHP 8.5 from the `ondrej/php` PPA (`cli`, `xml`, `mbstring`, `curl`, `zip`) plus upstream `composer` |
+| `php` | PHP 8.5 (`cli`, `xml`, `mbstring`, `curl`, `zip`) plus upstream `composer` |
 | `ruby` | `ruby-full` |
 | `rust` | `rustc`, `cargo` from apt |
 | `rustup` | current Rust via the rustup installer |
 
-Ubuntu pins compilers hard — apt's `rustc` is 1.75, years behind. `rustup.Dockerfile`
-is the escape hatch, and the same shape works for nvm, sdkman, rbenv or pyenv: run the
-installer at build time into a system path such as `/opt`, then point the tool's cache
-variable at `/home/agent`.
+A fresh LTS starts close to upstream — 26.04 carries rustc 1.93, Go 1.26, PHP
+8.5 — and then holds still for years while upstream moves. `rustup.Dockerfile` is
+the escape hatch for when that gap opens, and the same shape works for nvm,
+sdkman, rbenv or pyenv: run the installer at build time into a system path such
+as `/opt`, then point the tool's cache variable at `/home/agent`.
 
-The same applies to PHP: Ubuntu 24.04 ships 8.3 only, so `php.Dockerfile` adds the
-`ondrej/php` PPA. `PHP_VERSIONS` is a space-separated build argument; the first entry
-becomes the default `php`, and any others stay callable under their own names.
+`php.Dockerfile` takes 8.5 straight from the archive. `PHP_VERSIONS` is a
+space-separated build argument; the first entry becomes the default `php`, and
+any others stay callable under their own names — though on 26.04 the archive
+only has 8.5, and the `ondrej/php` PPA that carries the older ones has no
+26.04 builds yet.
 
 ```sh
 make php                                                    # PHP 8.5
-docker build -t dev-agent:php -f images/php.Dockerfile \
-    --build-arg PHP_VERSIONS="8.5 8.4 8.3" .                # php, php8.4, php8.3
 ```
 
 To make a project always use its own image, export `DEV_AGENT_IMAGE` from a shell
@@ -361,7 +362,7 @@ Environment variables:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `DEV_AGENT_IMAGE` | `dev-agent:ubuntu24` | Image to run. |
+| `DEV_AGENT_IMAGE` | `dev-agent:ubuntu26` | Image to run. |
 | `DEV_AGENT_HOME` | `~/.local/share/dev-agent/home` | Host directory mounted at `/home/agent`. |
 | `DEV_AGENT_CONFIG` | `~/.config/dev-agent/config.yml` | Config file path. |
 | `DEV_AGENT_MIRROR` | `1` | Set to `0` to mount projects at `/workspace` by default, as `--workspace` does. |

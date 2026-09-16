@@ -1,4 +1,4 @@
-IMAGE := dev-agent:ubuntu24
+IMAGE := dev-agent:ubuntu26
 VARIANTS := $(patsubst images/%.Dockerfile,%,$(wildcard images/*.Dockerfile))
 BASHRC ?= $(HOME)/.bashrc
 

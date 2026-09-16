@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE="${DEV_AGENT_IMAGE:-dev-agent:ubuntu24}"
+IMAGE="${DEV_AGENT_IMAGE:-dev-agent:ubuntu26}"
 
 # The hostname mirrors the image, so the shell prompt names the variant you are
 # in. A hostname may only hold alphanumerics and hyphens, so the ':' of the tag
