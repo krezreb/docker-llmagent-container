@@ -14,52 +14,113 @@
 # directory, builds the image, installs the wrapper to ~/.local/bin and writes
 # the alias block to ~/.bashrc.
 
-# Typing speed: 60ms per character, jittered by +/- jitter seconds, with a
+# Tcl line-buffers stdout, so the characters expect echoes would reach
+# asciinema in one burst at the newline and every command would look pasted.
+fconfigure stdout -buffering none
+
+# The prompt and Claude's banner are matched as UTF-8, so pin the encoding.
+encoding system utf-8
+
+# Claude asks the terminal what it is (XTVERSION, DA1). The answer arrives on
+# our stdin, and with echo on the recording terminal it gets printed straight
+# back out, at the cursor: "^[P>|tmux 3.4^[\^[[?1;2;4c" lands inside Claude's
+# input box and stays in the cells the TUI does not repaint, which is what eats
+# the spaces in whatever is typed there.
+catch {stty -echo}
+
+# Typing speed: 30ms per character, jittered by +/- jitter seconds, with a
 # longer beat after each space. `send -h` and send_human are the built-in way
 # to do this, but a plain per-character loop is one line longer and always
 # works, whatever the local expect does with its Weibull distribution.
-set char_delay 0.06
-set jitter 0.03
-set word_delay 0.12
-set prompt "dev$ "
+set char_delay 0.03
+set jitter 0.015
+set word_delay 0.06
+# Bright green prompt. Two spellings of the same thing: the bash PS1 literal
+# (\[ \] keep readline from counting the escapes as width) and the bytes it
+# renders to, which is what `expect` has to match on.
+# The prompt leaves dark green (32) switched on, so what gets typed after it is
+# dark green too. PS0 prints right after Enter and before the command runs, so
+# it resets the colour and command output stays plain.
+set prompt_ps1 {\[\e[1;32m\]❯\[\e[0m\] \[\e[32m\]}
+set prompt_ps0 {\e[0m}
+
+# Re-assert PS1 before every prompt. Anything that leaves the shell with a
+# different PS1 (Claude Code resets the terminal on the way out) would
+# otherwise drop the demo back to the real prompt, and re-setting it by hand
+# would mean typing an assignment on camera.
+set prompt_cmd "PS1='$prompt_ps1'"
+set prompt "\033\[1;32m❯\033\[0m "
 
 # `make build-image` pulls a base image and installs the agents.
 set timeout 1200
 
-proc pause {{s 2}} {
-    sleep $s
+# Wait, but keep reading the pty, so output during the wait is recorded as it
+# arrives instead of in one burst at the next `expect`. Never use this where a
+# prompt is about to be matched: it would consume the prompt first.
+proc pump {{s 2}} {
+    set deadline [expr {[clock milliseconds] + $s * 1000}]
+    while {[clock milliseconds] < $deadline} {
+        drain
+        sleep 0.05
+    }
+}
+
+# Read whatever the shell has echoed so far, without blocking. expect only
+# drains the pty while it is inside an `expect` command, so a send/sleep loop
+# on its own buffers the whole line and it lands in the recording in one burst
+# at the newline, looking pasted.
+proc drain {} {
+    expect -timeout 0 -re {.+} {} timeout {}
 }
 
 # Send a string one character at a time, so the recording shows it being typed.
-proc type_human {text} {
+proc type_human {text {scale 1}} {
     global char_delay jitter word_delay
     foreach c [split $text ""] {
         send -- $c
         if {$c eq " "} {
-            sleep $word_delay
+            sleep [expr {$word_delay * $scale}]
         } else {
-            sleep [expr {$char_delay + (rand() * 2 - 1) * $jitter}]
+            sleep [expr {($char_delay + (rand() * 2 - 1) * $jitter) * $scale}]
         }
+        drain
     }
+}
+
+# Wait for the host prompt, but return 0 instead of blocking for the full
+# timeout when it does not show up.
+proc at_prompt {{t 3}} {
+    global prompt
+    set seen 0
+    expect -timeout $t -ex $prompt {set seen 1} timeout {}
+    return $seen
 }
 
 # Type a command the way a person would, run it and wait for the shell prompt.
 proc run {cmd {wait 2}} {
     global prompt
     type_human $cmd
-    pause 0.5
+    pump 0.5
     send "\r"
     expect -ex $prompt
-    pause $wait
+    pump $wait
 }
 
-# Type a command inside a nested shell (the container, Claude Code), where the
-# prompt is not ours to match on. Wait a fixed time instead.
+# Type a command inside a nested shell, where the prompt is not ours to match
+# on. Wait a fixed time instead.
+#
+# dev-agent forwards only HOME and TERM, so the container keeps the image's own
+# prompt and knows nothing about our colours: input typed in there would come
+# out plain while the host half is green. send_user writes straight into the
+# recording without going through any shell, so the same dark green can be
+# switched on around the typing and off again once the command runs.
 proc run_nested {cmd {wait 3}} {
+    send_user "\033\[32m"
     type_human $cmd
-    pause 0.5
+    pump 0.5
     send "\r"
-    pause $wait
+    send_user "\033\[0m"
+    pump $wait
 }
 
 # Claude Code asks "do you trust the files in this folder?" the first time it
@@ -89,54 +150,87 @@ os.chmod(f, 0o600)
 } $home $path
 }
 
+# Made and entered from Tcl, before the shell starts: mkdir and cd are setup,
+# not part of the demo, and typing them is dead air the viewer sits through.
+# The spawned bash inherits this working directory.
+set workdir /tmp/demo
+file delete -force $workdir
+file mkdir $workdir
+cd $workdir
+
 # -noecho: without it expect prints the spawn command line, PS1 and all.
 # No quotes around $prompt: in Tcl a quote mid-word is a literal character, so
 # PS1="$prompt" would put the quotes in the prompt itself. Tcl does not split
 # words on spaces, so the trailing space survives on its own.
-spawn -noecho env PS1=$prompt bash --norc --noprofile
+spawn -noecho env PS1=$prompt_ps1 PS0=$prompt_ps0 PROMPT_COMMAND=$prompt_cmd bash --norc --noprofile
 expect -ex $prompt
-
-set workdir /tmp/dev-agent-demo
-file delete -force $workdir
-run "mkdir -p $workdir && cd $workdir"
-
-# --- the daemon is up ---------------------------------------------------
-run "docker --version"
 
 # --- get the repository -------------------------------------------------
-run "git clone https://github.com/krezreb/docker-llmagent-container.git"
-run "cd docker-llmagent-container"
+# Clone into the (empty) working directory itself: one directory level less in
+# the container's prompt, which prints the full path.
+run "git clone https://github.com/krezreb/docker-llmagent-container.git ."
 
-# --- build the default image --------------------------------------------
-run "make build-image"
-
-# --- install the wrapper and starter config -----------------------------
+# --- build the image, install the wrapper and starter config ------------
+# `install` depends on `build-image` (Makefile:23), so the build still runs
+# here; it is just not a separate step on camera.
 run "make install"
 
-# --- one alias per images/*.Dockerfile ----------------------------------
-run "make aliases"
-
-trust_dir $workdir/docker-llmagent-container
+trust_dir $workdir
 
 # --- Claude Code, inside the sandbox ------------------------------------
-# `clear` rides along with the command so the screen wipes without a bare
-# `clear` being typed on camera.
-run_nested "clear && dev-agent claude ." 8
-run_nested "/exit" 2
-expect -ex $prompt
-pause 2
+# run_nested holds for half a second after the line is typed, so the command
+# is readable before the TUI takes over the screen.
+run_nested "dev-agent claude ." 0
+
+# Wait for Claude's banner rather than guessing how long the container and the
+# TUI take to come up. Keystrokes sent before the box is drawn are dropped or
+# land garbled. Match the banner, not the U+276F input box: the shell prompt is
+# that same character, so the box is not a reliable "the TUI is up" signal.
+expect -timeout 60 -ex "Claude Code" {} timeout {}
+pump 1
+
+# Type a prompt but never send it: no API call, no answer to wait for, and
+# nothing to trim out of the recording afterwards. Three times slower than the
+# shell, because the TUI repaints the whole frame on every keystroke.
+type_human "write horse tinder" 3
+pump 3
+
+# Leave Claude. It answers the first ctrl-C with "Press Ctrl-C again to exit"
+# and forgets that offer in well under a second, so the second tap has to
+# follow immediately; a full second apart and every tap just re-arms the hint.
+# ctrl-D is the same deal on an empty box. Retry until the host prompt is back:
+# without that check the rest of the demo gets typed into Claude and submitted
+# as prompts.
+for {set i 0} {$i < 5} {incr i} {
+    send "\003"
+    sleep 0.25
+    send "\003"
+    if {[at_prompt 5]} break
+    send "\004"
+    sleep 0.25
+    send "\004"
+    if {[at_prompt 5]} break
+}
+pump 2
 
 # --- read-only mount: the project cannot be written ---------------------
-run_nested "clear && dev-agent bash --ro" 6
+run_nested "dev-agent bash --ro" 6
 run_nested "touch scratch.txt"
-run_nested "echo hacked >> README.md"
+# No sudo in the image and --cap-drop=ALL on the container, so there is no
+# route to root: "sudo: command not found".
+run_nested "sudo apt install nmap"
 # /home/agent and /tmp stay writable, so the agent keeps its own state
 run_nested "touch /tmp/fine && echo '/tmp still writable'"
-run_nested "exit" 2
-expect -ex $prompt
-pause 3
+pump 3
+
+catch {stty echo}
 
 # Close the pty instead of typing `exit`, so the recording does not end on a
 # stray command. asciinema stops when this script does.
 close
 wait
+
+# Leave nothing behind: the clone, the build context, whatever the demo wrote.
+# cd out of it first, since it is this script's working directory.
+cd /
+catch {file delete -force $workdir}

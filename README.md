@@ -8,6 +8,8 @@ The point is blast radius. An agent running on the host can read your SSH keys,
 your browser profile and every repository you own. Here it sees one directory
 and nothing else.
 
+![dev-agent installed, Claude Code running in the sandbox, and the read-only mount refusing writes](docs/demo.gif)
+
 ## Why not just the agent's own permissions?
 
 Both agents ship a permission system, and a project `.claude/settings.json` can
