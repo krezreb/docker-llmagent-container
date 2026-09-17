@@ -7,6 +7,7 @@ RUN apt-get update \
         ca-certificates \
         curl \
         bind9-dnsutils \
+        bubblewrap \
         git \
         jq \
         less \

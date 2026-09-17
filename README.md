@@ -39,7 +39,7 @@ decide what it may do with what exists. Keep both.
 ## What you get
 
 - **Ubuntu 26.04 LTS image** with both agents preinstalled globally via npm, plus the
-  tooling they expect (git, curl, jq, ripgrep, python3, build-essential).
+  tooling they expect (git, curl, jq, ripgrep, python3, build-essential, bubblewrap).
 - **`dev-agent` wrapper script** that starts a container with a hardened set of
   Docker flags and bind-mounts exactly one project directory, at the very path
   it has on the host, so the paths an agent reports mean the same on both sides.
@@ -254,6 +254,37 @@ host.
 The wrapper refuses to mount `/`, `/home`, `/root` or your home directory
 outright, since mounting any of those would defeat the purpose.
 
+### Codex's own sandbox does not run in here
+
+Codex sandboxes each command it runs with bubblewrap, which needs to create an
+unprivileged user namespace. `bubblewrap` is installed in the image, but on
+Ubuntu 24.04 and newer the host sets
+`kernel.apparmor_restrict_unprivileged_userns=1`, and unless docker's
+`docker-default` AppArmor profile carries the matching `userns` rule the call
+is denied inside the container:
+
+```
+bwrap: No permissions to create new namespace
+```
+
+Check your setup with:
+
+```sh
+dev-agent bash . -c 'bwrap --unshare-user --unshare-net --ro-bind / / /bin/true && echo userns-ok'
+```
+
+Where it fails, run codex with its own sandbox off — `codex --sandbox
+danger-full-access` — and let the container be the sandbox. That is the layer
+that matters: codex can then write anywhere it can already reach, which is the
+project mount, `/home/agent` and `/tmp`, and nothing else. What you give up is
+the inner layer: a command codex runs can rewrite the logins in `/home/agent`
+and can reach the network even when codex meant to deny it.
+
+The alternatives loosen the outer layer to enable the inner one, which is a bad
+trade here: `--security-opt apparmor=unconfined` drops the container's AppArmor
+profile, and `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` lifts
+the restriction for everything on the host, not just this container.
+
 ## Git worktrees
 
 Agents like to work in a `git worktree`. The two files that link one back to
@@ -430,5 +461,8 @@ rm -rf ~/.local/share/dev-agent/home
   if you would rather not hand over even the path, run with `--workspace`.
 - Anything you mount as the project directory is fully writable by the agent.
   Use the agent's own approval settings if you want a further check on that.
+- Codex's bubblewrap sandbox usually cannot start inside the container, since
+  creating a user namespace is denied there; see "Codex's own sandbox does not
+  run in here".
 - Docker on Linux is assumed; the `--user` mapping and bind mount semantics
   differ on Docker Desktop for macOS and Windows.
