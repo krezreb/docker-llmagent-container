@@ -150,7 +150,7 @@ leaves docker's cache in charge and lets an offline build go through.
 ## Usage
 
 ```
-dev-agent [--ro] [--workspace] [codex|claude|bash|tmux] [directory] [agent arguments...]
+dev-agent [--ro] [--workspace] [--host-network] [codex|claude|bash|tmux] [directory] [agent arguments...]
 ```
 
 `bash` drops you into a shell in the same sandbox, which is useful for
@@ -174,6 +174,7 @@ dev-agent bash ~/src/foo
 dev-agent tmux ~/src/foo
 dev-agent --ro claude ~/src/foo
 dev-agent --workspace claude ~/src/foo
+dev-agent --host-network codex ~/src/foo
 ```
 
 `--ro` mounts the project read-only, for when you want an agent to read the
@@ -181,6 +182,16 @@ code and not touch it — investigating a bug, reviewing a branch, answering
 questions about an unfamiliar tree. The agent can still write to `/home/agent`
 and `/tmp`, so it keeps its own session state, but every write into the project
 fails, including `git` ones: no commits, no branch switches, no stray files.
+
+`--host-network` puts the container in the host's network namespace
+(`docker run --network host`), so a service it starts is reachable on your own
+`localhost`. Codex's login flow needs this: it sends you to a callback URL on
+localhost, which otherwise lands in your browser outside the container and
+reaches nothing. It costs the container's network isolation — it shares your
+network interfaces and can talk to anything listening on localhost, including
+services bound only there — so use it for the login and drop it afterwards.
+Docker also refuses `--hostname` in that mode, so the prompt shows the host's
+hostname rather than the image's.
 
 Options may be given before the command or before the directory, so both
 `dev-agent --ro claude ~/src/foo` and `dev-agent claude --ro ~/src/foo` work.
@@ -227,7 +238,7 @@ Every container is started with:
 | `--user $(id -u):$(id -g)` | Files created in the project keep your ownership, not root's. |
 | `--tmpfs /tmp`, `--tmpfs /run` | Writable scratch space (`nosuid,nodev`), discarded on exit. |
 | `--rm` | Container is destroyed when the agent exits. |
-| `--hostname` | Taken from the image, so the shell prompt names the variant: `dev-agent:php` gives `agent@dev-agent-php`. Characters a hostname cannot hold, such as the `:` before the tag, become `-`. |
+| `--hostname` | Omitted under `--host-network`; otherwise taken from the image, so the shell prompt names the variant: `dev-agent:php` gives `agent@dev-agent-php`. Characters a hostname cannot hold, such as the `:` before the tag, become `-`. |
 
 Only two paths are writable and persistent:
 

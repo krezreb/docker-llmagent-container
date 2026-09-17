@@ -29,6 +29,11 @@ Options:
     --workspace Mount at /workspace instead, the way this wrapper used to.
                 DEV_AGENT_MIRROR=0 makes that the default.
     --mirror    Mount at the host path, undoing DEV_AGENT_MIRROR=0.
+    --host-network
+                Share the host's network namespace, for a login flow whose
+                callback URL points at localhost. Drops the container's
+                network isolation, and the prompt then shows the host's
+                hostname instead of the image's.
 
 Options may be given before the command or before the directory; everything
 from the directory on goes to the agent.
@@ -44,6 +49,7 @@ Examples:
     dev-agent --ro claude ~/src/foo
     dev-agent claude --ro ~/src/foo
     dev-agent --workspace claude ~/src/foo
+    dev-agent --host-network codex ~/src/foo
 EOF
     exit 2
 }
@@ -59,6 +65,10 @@ die() {
 # agent, so an agent of its own can still be given a '--ro' flag.
 #
 ro=""
+
+# Host network namespace, needed by auth flows that listen on localhost for a
+# callback. Off by default: it removes the container's network isolation.
+host_net=""
 
 # The project is mirrored at its host path unless that is turned off, either
 # for one run with --workspace or for good with DEV_AGENT_MIRROR=0.
@@ -82,6 +92,7 @@ take_flags() {
             --ro)        ro=1 ;;
             --mirror)    mirror=1; mirror_asked=1 ;;
             --workspace) mirror=""; mirror_asked="" ;;
+            --host-network) host_net=1 ;;
             *)           return ;;
         esac
 
@@ -291,7 +302,6 @@ docker_args=(
     --user "$(id -u):$(id -g)"
 
     --name "$container_name"
-    --hostname "$hostname"
 
     # Root filesystem cannot be modified.
     --read-only
@@ -323,6 +333,14 @@ docker_args=(
     --env "TERM=${TERM:-xterm-256color}"
 
 )
+
+# docker refuses --hostname together with --network host: the namespace it
+# joins already has one.
+if [[ -n "$host_net" ]]; then
+    docker_args+=(--network host)
+else
+    docker_args+=(--hostname "$hostname")
+fi
 
 docker_args+=("${extra_mounts[@]}")
 docker_args+=("$IMAGE" "$agent" "$@")
