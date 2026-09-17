@@ -96,6 +96,15 @@ proc at_prompt {{t 3}} {
     return $seen
 }
 
+# Same, for the container's own prompt. That one belongs to the image, so match
+# the one part of it we control: the working directory.
+proc at_container_prompt {{t 3}} {
+    global workdir
+    set seen 0
+    expect -timeout $t -re "$workdir\\$ " {set seen 1} timeout {}
+    return $seen
+}
+
 # Type a command the way a person would, run it and wait for the shell prompt.
 proc run {cmd {wait 2}} {
     global prompt
@@ -178,9 +187,14 @@ run "make install"
 trust_dir $workdir
 
 # --- Claude Code, inside the sandbox ------------------------------------
-# run_nested holds for half a second after the line is typed, so the command
-# is readable before the TUI takes over the screen.
-run_nested "dev-agent claude ." 0
+# Open a shell in the container first, then start Claude from in there: it
+# shows that the sandbox is a plain shell and the agent is just something
+# running inside it.
+run_nested "dev-agent bash ." 2
+
+# `claude`, not `claude .`: the CLI reads a positional argument as the opening
+# prompt, and the container already starts in the project directory.
+run_nested "claude" 0
 
 # Wait for Claude's banner rather than guessing how long the container and the
 # TUI take to come up. Keystrokes sent before the box is drawn are dropped or
@@ -198,20 +212,30 @@ pump 0.5
 # Leave Claude. It answers the first ctrl-C with "Press Ctrl-C again to exit"
 # and forgets that offer in well under a second, so the second tap has to
 # follow immediately; a full second apart and every tap just re-arms the hint.
-# ctrl-D is the same deal on an empty box. Retry until the host prompt is back:
-# without that check the rest of the demo gets typed into Claude and submitted
-# as prompts.
+# ctrl-D is the same deal on an empty box. Retry until the container's shell
+# prompt is back: without that check the rest of the demo gets typed into
+# Claude and submitted as prompts.
 for {set i 0} {$i < 5} {incr i} {
     send "\003"
     sleep 0.25
     send "\003"
-    if {[at_prompt 5]} break
+    if {[at_container_prompt 5]} break
     send "\004"
     sleep 0.25
     send "\004"
-    if {[at_prompt 5]} break
+    if {[at_container_prompt 5]} break
 }
-pump 2
+pump 1
+
+# Back to the host.
+run_nested "exit" 0
+at_prompt 15
+pump 1
+
+# A comment line: it is typed and run, does nothing, and says the shell step is
+# optional.
+run "# or call claude directly: dev-agent claude ." 1.5
+run "# same for codex:          dev-agent codex ." 1
 
 # --- read-only mount: the project cannot be written ---------------------
 run_nested "dev-agent bash --ro  # read only workspace" 2
