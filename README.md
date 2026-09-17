@@ -413,6 +413,7 @@ rm -rf ~/.local/share/dev-agent/home
 
 - Network access is not restricted. The agents need it to reach their APIs, and
   so does anything they run in your project.
+- Pasting images into Claude code is broken
 - The container is told where the project sits on the host, since that is the
   path it is mounted at. It still cannot read a thing outside the mount, but
   if you would rather not hand over even the path, run with `--workspace`.
