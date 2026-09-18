@@ -1,0 +1,333 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>dev-agent proxy</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  The web UI of SPEC section 12: three panes, no build step. Vue is the global
+  build, vendored into the image by the Dockerfile, so the page keeps working
+  in lockdown when nothing can reach a CDN. Components are plain objects.
+-->
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fff; --fg: #1a1a1a; --dim: #6a6a6a; --line: #e0e0e0;
+    --panel: #f7f7f7; --accent: #2d6cdf;
+    --allow: #1a7f37; --deny: #c0392b; --tunnel: #8250df; --pending: #b26a00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181c; --fg: #e6e6e6; --dim: #9a9a9a; --line: #2c2f36;
+      --panel: #1d2026; --accent: #6ea8fe;
+      --allow: #57b45f; --deny: #f07167; --tunnel: #b392f0; --pending: #e0a030;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.45 system-ui, sans-serif;
+  }
+  header {
+    display: flex; flex-wrap: wrap; gap: 1rem; align-items: baseline;
+    padding: .7rem 1rem; border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; background: var(--bg); z-index: 2;
+  }
+  h1 { font-size: 1rem; margin: 0; font-weight: 600; }
+  h2 { font-size: .85rem; margin: 0 0 .5rem; text-transform: uppercase;
+       letter-spacing: .06em; color: var(--dim); }
+  main { padding: 1rem; display: grid; gap: 1rem; }
+  section { border: 1px solid var(--line); border-radius: 6px; padding: .8rem; }
+  section.urgent { border-color: var(--pending); }
+  .dim { color: var(--dim); }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+  button {
+    font: inherit; padding: .25rem .6rem; border: 1px solid var(--line);
+    border-radius: 4px; background: var(--panel); color: var(--fg); cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--deny); }
+  input, select { font: inherit; padding: .25rem .4rem; border: 1px solid var(--line);
+                  border-radius: 4px; background: var(--bg); color: var(--fg); }
+  table { width: 100%; border-collapse: collapse; }
+  td, th { text-align: left; padding: .25rem .5rem; border-bottom: 1px solid var(--line);
+           vertical-align: top; }
+  th { color: var(--dim); font-weight: 500; font-size: .8rem; }
+  tr.clickable:hover { background: var(--panel); cursor: pointer; }
+  pre { margin: .3rem 0 0; padding: .5rem; background: var(--panel);
+        border-radius: 4px; overflow-x: auto; font-size: .8rem; }
+  .allow { color: var(--allow); } .deny { color: var(--deny); }
+  .tunnel { color: var(--tunnel); } .pending { color: var(--pending); }
+  .tag { font-size: .75rem; padding: 0 .35rem; border: 1px solid var(--line);
+         border-radius: 3px; color: var(--dim); }
+  .live::before { content: "●"; margin-right: .3rem; }
+  .live.on { color: var(--allow); }
+  .live.off { color: var(--deny); animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  /* The dots are revealed by widening a clipped span rather than by animating
+     `content`, which not every browser interpolates. */
+  .ellipsis { display: inline-block; width: 0; overflow: hidden;
+              vertical-align: bottom; animation: ellipsis 1.4s steps(4) infinite; }
+  @keyframes ellipsis { to { width: 1.1em; } }
+  @media (prefers-reduced-motion: reduce) {
+    .live.off { animation: none; }
+    .ellipsis { animation: none; width: 1.1em; }
+  }
+  .truncate { max-width: 34rem; overflow: hidden; text-overflow: ellipsis;
+              white-space: nowrap; }
+  .pills { display: inline-flex; border: 1px solid var(--line); border-radius: 999px;
+           overflow: hidden; }
+  .pill { border: 0; border-radius: 0; padding: .25rem .8rem; background: transparent;
+          color: var(--dim); }
+  .pill + .pill { border-left: 1px solid var(--line); }
+  .pill:hover { background: var(--panel); color: var(--fg); }
+  .pill.on { background: var(--accent); color: #fff; }
+  .rules { margin: .4rem 0 0; }
+  .save { display: inline-flex; gap: .4rem; align-items: center; padding: .2rem .5rem;
+          border: 1px dashed var(--line); border-radius: 6px; }
+</style>
+
+<div id="app">
+  <header>
+    <h1>dev-agent proxy</h1>
+    <span class="pills">
+      <button v-for="m in modes" :key="m.value" class="pill"
+              :class="{on: mode === m.value}" @click="setMode(m.value)">
+        {{ m.label }}
+      </button>
+    </span>
+    <span class="live" :class="connected ? 'on' : 'off'">
+      <template v-if="connected">live</template>
+      <template v-else>
+        disconnected (connecting<span class="ellipsis">...</span>)
+      </template>
+    </span>
+  </header>
+
+  <main>
+    <!-- Pending takes the top of the page: it is the one pane someone is
+         actually waiting on. -->
+    <section v-if="pending.length" class="urgent">
+      <h2>Pending — {{ pending.length }} waiting on you</h2>
+      <table>
+        <tbody>
+        <tr><th>request</th><th>category</th><th>client</th><th>waiting</th><th></th></tr>
+        <tr v-for="p in pending" :key="p.key">
+          <td class="mono">
+            {{ p.method || 'CONNECT' }} <span class="truncate">{{ p.url }}</span>
+            <span v-if="p.waiters > 1" class="tag">{{ p.waiters }} waiters</span>
+          </td>
+          <td class="dim">{{ p.cat }}</td>
+          <td class="dim mono">{{ p.clients.join(', ') }}</td>
+          <td class="mono">{{ elapsed(p) }}s</td>
+          <td class="row">
+            <button class="primary" @click="resolve(p, 'allow')">Allow once</button>
+            <button class="danger" @click="resolve(p, 'deny')">Deny once</button>
+            <!-- One ruleset and one scope for both saves: the choice is where
+                 the rule goes and how wide it is, which is the same question
+                 whichever way the answer falls. -->
+            <span class="save">
+              <button @click="resolve(p, 'allow', true)">Always Allow</button>
+              <button class="danger" @click="resolve(p, 'deny', true)">Always Deny</button>
+              <select v-model="p.scope">
+                <option value="host">host</option>
+                <option value="host+path">host+path</option>
+              </select>
+              <span class="dim">in</span>
+              <select v-model="p.saveTo">
+                <option v-for="r in rulesets" :key="r.file" :value="r.file">{{ r.file }}</option>
+              </select>
+            </span>
+          </td>
+        </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Live log</h2>
+      <div class="row" style="margin-bottom:.5rem">
+        <input v-model="filter.host" placeholder="host contains">
+        <select v-model="filter.cat">
+          <option value="">every category</option>
+          <option v-for="c in cats" :key="c" :value="c">{{ c }}</option>
+        </select>
+        <select v-model="filter.decision">
+          <option value="">every decision</option>
+          <option>allow</option><option>deny</option><option>tunnel</option>
+        </select>
+        <span class="dim">{{ shown.length }} of {{ log.length }}</span>
+      </div>
+      <table>
+        <tbody>
+        <tr><th>time</th><th>client</th><th>request</th><th>cat</th>
+            <th>status</th><th>decision</th><th>ms</th></tr>
+        <template v-for="rec in shown" :key="rec.id">
+          <tr class="clickable" @click="open = open === rec.id ? null : rec.id">
+            <td class="mono dim">{{ rec.ts.slice(11, 23) }}</td>
+            <td class="mono">{{ rec.client }}</td>
+            <td class="mono truncate">
+              {{ rec.method || 'CONNECT' }} {{ rec.host }}{{ rec.path || '' }}
+            </td>
+            <td class="dim">{{ rec.cat }}</td>
+            <td class="mono">{{ rec.status === null ? '—' : rec.status }}</td>
+            <td :class="rec.decision">
+              {{ rec.decision }}
+              <span class="dim">{{ rec.rule }}</span>
+            </td>
+            <td class="mono dim">
+              {{ rec.ms }}<span v-if="rec.held_ms"> (+{{ rec.held_ms }} held)</span>
+            </td>
+          </tr>
+          <tr v-if="open === rec.id"><td colspan="7"><pre>{{ pretty(rec) }}</pre></td></tr>
+        </template>
+        </tbody>
+      </table>
+      <p v-if="!shown.length" class="dim">Nothing yet.</p>
+    </section>
+
+    <section>
+      <h2>Rulesets</h2>
+      <table>
+        <tbody>
+        <tr v-for="r in rulesets" :key="r.file">
+          <td style="width:1%">
+            <input type="checkbox" :checked="r.enabled" @change="toggle(r, $event)">
+          </td>
+          <td>
+            <span class="mono">{{ r.file }}</span>
+            <span class="dim"> — {{ r.description || r.name }}</span>
+            <button style="margin-left:.5rem" @click="expand(r)">
+              {{ r.rules }} rules {{ r.open ? '▾' : '▸' }}
+            </button>
+            <table v-if="r.open" class="rules">
+              <tbody>
+              <tr v-for="(rule, i) in r.detail" :key="i">
+                <td :class="rule.action" style="width:1%">{{ rule.action }}</td>
+                <td class="mono">{{ rule.match }}<span v-if="rule.path">{{ rule.path }}</span></td>
+                <td class="dim">{{ rule.note }}</td>
+              </tr>
+              </tbody>
+            </table>
+          </td>
+        </tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+</div>
+
+<script src="vue.global.prod.js"></script>
+<script>
+const LOG_MAX = 2000;  // the server's ring is 5000; this is one screen's worth
+                       // of scrollback, kept small so the page stays quick.
+
+const api = async (path, options) => {
+  const response = await fetch(path, options);
+  if (!response.ok) throw new Error((await response.json()).error || response.statusText);
+  return response.json();
+};
+const put = (path, body) => api(path, {
+  method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify(body),
+});
+
+Vue.createApp({
+  data: () => ({
+    // The labels are the UI's; the values are the API's, and they differ only
+    // in case and spacing.
+    modes: [
+      {value: 'default-allow', label: 'Default-Allow'},
+      {value: 'default-deny', label: 'Default-Deny'},
+      {value: 'lockdown', label: 'Lockdown'},
+      {value: 'log-only', label: 'Log-only'},
+    ],
+    mode: '', rulesets: [], pending: [], log: [], open: null, connected: false,
+    fetchedAt: Date.now(), now: Date.now(),
+    filter: {host: '', cat: '', decision: ''},
+  }),
+
+  computed: {
+    cats() { return [...new Set(this.log.map(r => r.cat).filter(Boolean))].sort(); },
+    shown() {
+      const f = this.filter;
+      return this.log.filter(r =>
+        (!f.host || (r.host || '').includes(f.host)) &&
+        (!f.cat || r.cat === f.cat) &&
+        (!f.decision || r.decision === f.decision));
+    },
+  },
+
+  async mounted() {
+    await Promise.all([this.loadPolicy(), this.loadLog(), this.loadPending()]);
+    this.stream();
+    // Only the displayed age ticks; the entries themselves arrive over SSE.
+    setInterval(() => { this.now = Date.now(); }, 1000);
+  },
+
+  methods: {
+    async loadPolicy() {
+      const policy = await api('/api/policy');
+      this.mode = policy.mode;
+      this.rulesets = policy.rulesets.map(r =>
+        Object.assign({open: false, detail: []}, r));
+    },
+    async loadLog() { this.log = (await api('/api/log')).log; },
+    async loadPending() {
+      const previous = Object.fromEntries(this.pending.map(p => [p.key, p]));
+      this.pending = (await api('/api/pending')).pending.map(p => Object.assign(p, {
+        saveTo: previous[p.key]?.saveTo || this.rulesets[0]?.file,
+        scope: previous[p.key]?.scope || 'host',
+      }));
+      this.fetchedAt = Date.now();
+    },
+
+    stream() {
+      const events = new EventSource('/api/events');
+      events.onopen = () => { this.connected = true; };
+      // EventSource reconnects on its own, so 'disconnected' is always also
+      // 'connecting'; the header says so rather than looking dead.
+      events.onerror = () => { this.connected = false; };
+      events.addEventListener('request', e => {
+        this.log.unshift(JSON.parse(e.data));
+        if (this.log.length > LOG_MAX) this.log.length = LOG_MAX;
+      });
+      for (const kind of ['pending', 'resolved']) {
+        events.addEventListener(kind, () => this.loadPending());
+      }
+      events.addEventListener('state', () => this.loadPolicy());
+    },
+
+    elapsed(entry) {
+      return Math.round((entry.waiting_ms + this.now - this.fetchedAt) / 1000);
+    },
+    pretty(record) { return JSON.stringify(record, null, 2); },
+
+    async setMode(mode) {
+      await put('/api/mode', {mode});
+      this.mode = mode;
+    },
+    async toggle(ruleset, event) {
+      await put('/api/rulesets/' + ruleset.file, {enabled: event.target.checked});
+      ruleset.enabled = event.target.checked;
+    },
+    async expand(ruleset) {
+      ruleset.open = !ruleset.open;
+      if (ruleset.open && !ruleset.detail.length) {
+        ruleset.detail = (await api('/api/rulesets/' + ruleset.file)).rules;
+      }
+    },
+    async resolve(entry, decision, save) {
+      await api('/api/pending/' + entry.key, {
+        method: 'POST', headers: {'content-type': 'application/json'},
+        body: JSON.stringify({
+          decision,
+          save_to: save ? entry.saveTo : null,
+          scope: entry.scope,
+        }),
+      });
+      this.pending = this.pending.filter(p => p.key !== entry.key);
+      if (save) this.loadPolicy();  // the rule count on the pane below moved
+    },
+  },
+}).mount('#app');
+</script>

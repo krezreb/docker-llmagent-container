@@ -34,6 +34,11 @@ Options:
                 callback URL points at localhost. Drops the container's
                 network isolation, and the prompt then shows the host's
                 hostname instead of the image's.
+    --proxy     Route all network access through the dev-agent proxy and cut
+                off direct internet access. Starts the proxy if it is not
+                already running; its web UI is at http://127.0.0.1:8099.
+                Log in once with --host-network first: the OAuth callback
+                cannot reach a container on an internal network.
 
 Options may be given before the command or before the directory; everything
 from the directory on goes to the agent.
@@ -50,6 +55,7 @@ Examples:
     dev-agent claude --ro ~/src/foo
     dev-agent --workspace claude ~/src/foo
     dev-agent --host-network codex ~/src/foo
+    dev-agent --proxy claude ~/src/foo
 EOF
     exit 2
 }
@@ -69,6 +75,11 @@ ro=""
 # Host network namespace, needed by auth flows that listen on localhost for a
 # callback. Off by default: it removes the container's network isolation.
 host_net=""
+
+# Route egress through the dev-agent proxy, on a docker network with no route
+# to the internet. Off by default: it needs the proxy installed, and it breaks
+# anything that is not HTTP or HTTPS.
+proxy=""
 
 # The project is mirrored at its host path unless that is turned off, either
 # for one run with --workspace or for good with DEV_AGENT_MIRROR=0.
@@ -93,6 +104,7 @@ take_flags() {
             --mirror)    mirror=1; mirror_asked=1 ;;
             --workspace) mirror=""; mirror_asked="" ;;
             --host-network) host_net=1 ;;
+            --proxy)     proxy=1 ;;
             *)           return ;;
         esac
 
@@ -247,6 +259,160 @@ mkdir -p "$agent_home"
 chmod 700 "$agent_home"
 
 #
+# Egress proxy.
+#
+# The container is attached to a docker network created with 'internal: true',
+# which has no gateway, so there is no route to the internet and no external
+# name resolves. The proxy sits on that network and on a second one that does
+# have a route, and is the only way out.
+#
+# The HTTP_PROXY and HTTPS_PROXY variables below are a convenience for
+# well-behaved clients, not the enforcement. An agent that unsets them loses
+# the network rather than freeing it, which is what makes the failure mode
+# closed.
+#
+proxy_args=()
+
+# Replaces a marked block in a file, or appends one, leaving everything else
+# alone: AGENTS.md is a file the user may have their own content in. Same
+# convention as the 'aliases' target in the Makefile.
+write_marked_block() {
+    local file="$1" begin="$2" end="$3" body="$4" tmp="$1.dev-agent.tmp"
+
+    mkdir -p "$(dirname "$file")"
+    touch "$file"
+
+    awk -v b="$begin" -v e="$end" \
+        'index($0, b) { skip = 1 } !skip { print } index($0, e) { skip = 0 }' \
+        "$file" > "$tmp"
+
+    { printf '%s\n' "$begin"; cat "$body"; printf '%s\n' "$end"; } >> "$tmp"
+    mv "$tmp" "$file"
+}
+
+if [[ -n "$proxy" ]]; then
+    # The host network namespace has direct internet access by definition, so
+    # the combination is a contradiction rather than a layering.
+    if [[ -n "$host_net" ]]; then
+        die "--proxy and --host-network are mutually exclusive: the host network has
+             direct internet access. Log in once with --host-network, then use --proxy."
+    fi
+
+    proxy_state="${DEV_AGENT_PROXY_STATE:-$HOME/.local/share/dev-agent/proxy}"
+    proxy_compose="${DEV_AGENT_COMPOSE:-$HOME/.config/dev-agent/compose.proxy.yml}"
+
+    [[ -f "$proxy_compose" ]] ||
+        die "no proxy compose file at $proxy_compose; run 'make -C proxy install'"
+
+    # Idempotent and fast when the proxy is already up. Failure is fatal:
+    # --proxy that silently degraded to unfiltered access would be worse than
+    # --proxy that refuses to start.
+    docker compose -p dev-agent -f "$proxy_compose" up -d ||
+        die "could not start the proxy; refusing to run without it"
+
+    # First run only: the proxy generates the CA as it starts.
+    for _ in $(seq 30); do
+        [[ -f "$proxy_state/agent-ca/ca.crt" ]] && break
+        sleep 1
+    done
+
+    [[ -f "$proxy_state/agent-ca/ca.crt" ]] ||
+        die "the proxy did not produce $proxy_state/agent-ca/ca.crt"
+
+    #
+    # What gets mounted is assembled here rather than in the proxy's state
+    # directory, and is owned by whoever runs dev-agent.
+    #
+    # The proxy writes /state as its own uid and the container runs as this
+    # one, so a bundle written into the proxy's state directory would be a
+    # bundle this script may not have permission to write. Reading the
+    # certificate out and building the bundle next door needs no such
+    # agreement between the two uids.
+    #
+    ca_dir="${DEV_AGENT_CA:-$HOME/.local/share/dev-agent/ca}"
+    mkdir -p "$ca_dir"
+
+    cp "$proxy_state/agent-ca/ca.crt" "$ca_dir/ca.crt"
+
+    # The trust store of *this* image with the interception CA appended, not
+    # the CA alone: SSL_CERT_FILE and its siblings replace the trust store
+    # rather than adding to it, so a lone certificate would break every host
+    # the proxy tunnels instead of intercepting.
+    #
+    # Rebuilt every run. $IMAGE varies through DEV_AGENT_IMAGE, the command
+    # costs a fraction of a second, and a stale trust store surfaces days
+    # later as one host mysteriously failing to verify.
+    if ! { docker run --rm "$IMAGE" cat /etc/ssl/certs/ca-certificates.crt &&
+           cat "$ca_dir/ca.crt"; } > "$ca_dir/bundle.crt.$$"; then
+        rm -f "$ca_dir/bundle.crt.$$"
+        die "could not build the CA bundle from $IMAGE"
+    fi
+
+    mv "$ca_dir/bundle.crt.$$" "$ca_dir/bundle.crt"
+    chmod 0644 "$ca_dir/ca.crt" "$ca_dir/bundle.crt"
+
+    proxy_args=(
+        --mount "type=bind,src=${ca_dir},dst=/etc/dev-agent-ca,readonly"
+
+        --env "HTTP_PROXY=http://dev-agent-proxy:3128"
+        --env "HTTPS_PROXY=http://dev-agent-proxy:3128"
+        --env "http_proxy=http://dev-agent-proxy:3128"
+        --env "https_proxy=http://dev-agent-proxy:3128"
+        --env "NO_PROXY=localhost,127.0.0.1,dev-agent-proxy"
+        --env "no_proxy=localhost,127.0.0.1,dev-agent-proxy"
+
+        # The interception CA cannot be installed into the system trust store
+        # and 'update-ca-certificates' run, because the root filesystem is
+        # read-only. These are the only mechanism available.
+        --env SSL_CERT_FILE=/etc/dev-agent-ca/bundle.crt
+        --env REQUESTS_CA_BUNDLE=/etc/dev-agent-ca/bundle.crt
+        --env CURL_CA_BUNDLE=/etc/dev-agent-ca/bundle.crt
+        --env GIT_SSL_CAINFO=/etc/dev-agent-ca/bundle.crt
+        --env CARGO_HTTP_CAINFO=/etc/dev-agent-ca/bundle.crt
+        --env PIP_CERT=/etc/dev-agent-ca/bundle.crt
+
+        # Node appends this one, so it takes the bare certificate.
+        --env NODE_EXTRA_CA_CERTS=/etc/dev-agent-ca/ca.crt
+
+        # Node reads neither HTTP_PROXY nor HTTPS_PROXY on its own, in fetch
+        # or in the core http/https modules. Without this it connects direct,
+        # and since no external name resolves on this network it fails with
+        # 'getaddrinfo EAI_AGAIN' - which names DNS and points at nothing that
+        # is actually wrong. Needs node 24 or newer.
+        --env NODE_OPTIONS=--use-env-proxy
+    )
+
+    #
+    # Tell whatever is inside the container that egress is filtered, so that a
+    # blocked fetch reads as policy rather than as a bug. Per agent, because
+    # the mechanisms are not shared: claude has skills, codex has AGENTS.md,
+    # and curl has neither. The proxy's 403 body is what always works; this is
+    # only so the agent knows before it wastes a turn.
+    #
+    skill="${DEV_AGENT_SKILL:-$HOME/.config/dev-agent/skills/egress-policy/SKILL.md}"
+
+    if [[ -f "$skill" ]]; then
+        case "$agent" in
+            claude)
+                mkdir -p "$agent_home/.claude/skills/egress-policy"
+                cp "$skill" "$agent_home/.claude/skills/egress-policy/SKILL.md"
+                ;;
+            codex)
+                write_marked_block "$agent_home/.codex/AGENTS.md" \
+                    '# >>> dev-agent egress policy >>>' \
+                    '# <<< dev-agent egress policy <<<' \
+                    "$skill"
+                ;;
+        esac
+    else
+        printf 'dev-agent: no egress skill at %s; the agent will learn from the 403 body\n' \
+            "$skill" >&2
+    fi
+
+    printf 'dev-agent: egress goes through the proxy; UI at http://127.0.0.1:8099\n' >&2
+fi
+
+#
 # Optional extra mounts, from a config file of the form:
 #
 #   mounts:
@@ -340,8 +506,13 @@ if [[ -n "$host_net" ]]; then
     docker_args+=(--network host)
 else
     docker_args+=(--hostname "$hostname")
+
+    # The internal network compose creates, in place of the default bridge.
+    # --hostname is still passed, as it is on the default bridge today.
+    [[ -z "$proxy" ]] || docker_args+=(--network dev-agent_agents)
 fi
 
+docker_args+=("${proxy_args[@]}")
 docker_args+=("${extra_mounts[@]}")
 docker_args+=("$IMAGE" "$agent" "$@")
 

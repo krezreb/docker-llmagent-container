@@ -1,0 +1,42 @@
+# Host to category, in order, first match wins, fallback 'unknown'.
+#
+# A lookup table and nothing more: no classifier, no inference from traffic
+# shape. A category that is wrong is fixed by editing one line. Adding a name
+# that is not listed below is how you add a category.
+categories:
+  - {pattern: "*.anthropic.com",      category: llm-api}
+  - {pattern: "api.openai.com",       category: llm-api}
+  - {pattern: "auth.openai.com",      category: llm-api}
+  - {pattern: "chatgpt.com",          category: llm-api}
+
+  - {pattern: "*.ubuntu.com",         category: os-pkg}
+  - {pattern: "*.debian.org",         category: os-pkg}
+  - {pattern: "deb.nodesource.com",   category: os-pkg}
+
+  - {pattern: "registry.npmjs.org",   category: lang-pkg}
+  - {pattern: "pypi.org",             category: lang-pkg}
+  - {pattern: "*.pythonhosted.org",   category: lang-pkg}
+  - {pattern: "crates.io",            category: lang-pkg}
+  - {pattern: "*.crates.io",          category: lang-pkg}
+  - {pattern: "rubygems.org",         category: lang-pkg}
+  - {pattern: "*.golang.org",         category: lang-pkg}
+  - {pattern: "repo.maven.apache.org", category: lang-pkg}
+  - {pattern: "repo1.maven.org",      category: lang-pkg}
+
+  - {pattern: "github.com",           category: vcs}
+  - {pattern: "*.github.com",         category: vcs}
+  - {pattern: "*.githubusercontent.com", category: vcs}
+  - {pattern: "gitlab.com",           category: vcs}
+
+  - {pattern: "*.amazonaws.com",      category: cloud}
+  - {pattern: "*.googleapis.com",     category: cloud}
+  - {pattern: "*.azure.com",          category: cloud}
+
+  - {pattern: "*.wikipedia.org",      category: docs}
+  - {pattern: "docs.python.org",      category: docs}
+  - {pattern: "developer.mozilla.org", category: docs}
+  - {pattern: "stackoverflow.com",    category: docs}
+
+  - {pattern: "*.sentry.io",          category: telemetry}
+  - {pattern: "*.segment.io",         category: telemetry}
+  - {pattern: "*.statsig.com",        category: telemetry}

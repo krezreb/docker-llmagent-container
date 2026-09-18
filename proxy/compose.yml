@@ -1,0 +1,17 @@
+name: dev-agent            # pins the network name to dev-agent_agents
+
+services:
+  proxy:
+    image: dev-agent-proxy  # built by proxy/Makefile; no build: here, see 5.1
+    container_name: dev-agent-proxy
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8099:8099"
+    volumes:
+      - ${DEV_AGENT_PROXY_STATE:-~/.local/share/dev-agent/proxy}:/state
+    networks: [egress, agents]
+
+networks:
+  egress: {}
+  agents:
+    internal: true

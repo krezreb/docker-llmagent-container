@@ -1,0 +1,72 @@
+# The starter ruleset: what a development container needs to function.
+#
+# Edited by hand or from the UI; the proxy re-reads it when its mtime moves,
+# so neither a restart nor a rebuild is needed. It is copied in only when
+# /state/rulesets is empty, so your edits are never overwritten.
+name: default
+description: Everything a normal development container needs
+enabled: true
+rules:
+  - match: api.anthropic.com
+    action: allow
+    note: Claude API
+  - match: console.anthropic.com
+    action: allow
+    note: Claude token refresh
+  - match: api.openai.com
+    action: allow
+    note: OpenAI API
+  - match: chatgpt.com
+    action: allow
+    note: codex, when signed in with ChatGPT
+  - match: auth.openai.com
+    action: allow
+    note: codex token refresh
+
+  - match: "*.ubuntu.com"
+    action: allow
+    note: apt
+  - match: deb.nodesource.com
+    action: allow
+    note: apt, NodeSource
+
+  - match: registry.npmjs.org
+    action: allow
+    note: npm
+  - match: pypi.org
+    action: allow
+    note: pip
+  - match: files.pythonhosted.org
+    action: allow
+    note: pip
+  - match: "*.crates.io"
+    action: allow
+    note: cargo
+  - match: crates.io
+    action: allow
+    note: cargo
+  - match: rubygems.org
+    action: allow
+    note: gem
+  - match: proxy.golang.org
+    action: allow
+    note: go modules
+  - match: sum.golang.org
+    action: allow
+    note: go checksum database
+  - match: repo.maven.apache.org
+    action: allow
+    note: maven central
+  - match: repo1.maven.org
+    action: allow
+    note: maven central
+
+  - match: github.com
+    action: allow
+    note: git over HTTPS
+  - match: codeload.github.com
+    action: allow
+    note: tarball and zip downloads
+  - match: "*.githubusercontent.com"
+    action: allow
+    note: raw files and release assets, where a clone redirects
