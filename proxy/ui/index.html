@@ -82,6 +82,8 @@
   .pill + .pill { border-left: 1px solid var(--line); }
   .pill:hover { background: var(--panel); color: var(--fg); }
   .pill.on { background: var(--accent); color: #fff; }
+  /* Full-width row of the wrapping header, so the hint sits under the pills. */
+  .hint { flex-basis: 100%; margin: -.3rem 0 0; color: var(--dim); font-size: .85rem; }
   .rules { margin: .4rem 0 0; }
   .plain { border: 0; background: transparent; padding: .1rem .3rem .1rem 0;
            font: inherit; color: inherit; }
@@ -99,7 +101,8 @@
     <h1>dev-agent proxy</h1>
     <span class="pills">
       <button v-for="m in modes" :key="m.value" class="pill"
-              :class="{on: mode === m.value}" @click="setMode(m.value)">
+              :class="{on: mode === m.value}" @click="setMode(m.value)"
+              @mouseenter="hover = m.value" @mouseleave="hover = ''">
         {{ m.label }}
       </button>
     </span>
@@ -109,6 +112,9 @@
         disconnected (connecting<span class="ellipsis">...</span>)
       </template>
     </span>
+    <!-- Hovering a pill explains the mode it would switch to; otherwise the
+         line describes the mode that is on. -->
+    <p class="hint">{{ hint }}</p>
   </header>
 
   <main>
@@ -339,11 +345,16 @@ const app = Vue.createApp({
     // The labels are the UI's; the values are the API's, and they differ only
     // in case and spacing.
     modes: [
-      {value: 'default-allow', label: 'Default-Allow'},
-      {value: 'default-deny', label: 'Default-Deny'},
-      {value: 'lockdown', label: 'Lockdown'},
-      {value: 'log-only', label: 'Log-only'},
+      {value: 'default-allow', label: 'Default-Allow',
+       hint: 'Allow all traffic unless specifically denied.'},
+      {value: 'default-deny', label: 'Default-Deny',
+       hint: 'Block traffic unless specifically allowed \u2014 prompt here to allow.'},
+      {value: 'lockdown', label: 'Lockdown',
+       hint: 'No egress traffic allowed.'},
+      {value: 'log-only', label: 'Log-only',
+       hint: 'Allow all traffic, even if in deny rules.'},
     ],
+    hover: '',
     mode: '', rulesets: [], pending: [], log: [], open: null, connected: false,
     fetchedAt: Date.now(), now: Date.now(), newRuleset: '', error: '',
     paint: null,
@@ -351,6 +362,7 @@ const app = Vue.createApp({
   }),
 
   computed: {
+    hint() { return this.modes.find(m => m.value === (this.hover || this.mode))?.hint || ''; },
     cats() { return [...new Set(this.log.map(r => r.cat).filter(Boolean))].sort(); },
     shown() {
       const f = this.filter;
