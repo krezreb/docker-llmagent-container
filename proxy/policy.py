@@ -189,7 +189,7 @@ class Policy:
         name = (name or "").strip()
         if not name:
             raise ValueError("a ruleset needs a name")
-        self._set_key(filename, "name", yaml.safe_dump(name, default_style='"').strip().rstrip("."),
+        self._set_key(filename, "name", _scalar(name),
                       lambda doc: (doc.get("name") or "") == name)
         ruleset.name = name
         self._mtimes = self._stamp()
@@ -197,8 +197,7 @@ class Policy:
     def set_description(self, filename: str, description: str) -> None:
         ruleset = self.rulesets[filename]
         description = (description or "").strip()
-        self._set_key(filename, "description",
-                      yaml.safe_dump(description, default_style='"').strip().rstrip("."),
+        self._set_key(filename, "description", _scalar(description),
                       lambda doc: (doc.get("description") or "") == description)
         ruleset.description = description
         self._mtimes = self._stamp()
@@ -224,27 +223,38 @@ class Policy:
         One call for a whole drag: the UI paints across a run of rules and
         commits once, so the file is written once and reloaded once.
         """
+        value = "true" if enabled else "false"
+        self._edit_rules(
+            filename, indexes,
+            lambda lines, span: _set_item_key(lines, *span, "enabled", value),
+            lambda doc: all(bool(doc["rules"][i].get("enabled", True)) is bool(enabled)
+                            for i in indexes),
+            lambda doc: [doc["rules"][i].update(enabled=enabled) for i in indexes],
+        )
+
+    def _edit_rules(self, filename: str, indexes, edit, ok, rewrite) -> None:
+        """Apply a line edit to some rules, checking the result before keeping it.
+
+        Line arithmetic rather than a YAML round trip, because these files
+        carry the user's comments; `rewrite` is the round trip, used only when
+        a file's shape defeats the line edit.
+        """
         path = os.path.join(self.rulesets_dir, filename)
         text = open(path).read()
         lines = text.split("\n")
         spans = _rule_spans(lines)
 
-        indexes = sorted(set(indexes))
-        if not indexes or indexes[-1] >= len(spans):
+        indexes = sorted({int(i) for i in indexes})
+        if not indexes or indexes[0] < 0 or indexes[-1] >= len(spans):
             raise IndexError(f"{filename} has {len(spans)} rules")
 
         # From the bottom, so an insertion never moves a span still to come.
         for index in reversed(indexes):
-            _set_item_enabled(lines, *spans[index], enabled)
-
-        def ok(doc):
-            rules = doc.get("rules") or []
-            return all(bool(rules[i].get("enabled", True)) is bool(enabled) for i in indexes)
+            edit(lines, spans[index])
 
         if not _write_checked(path, "\n".join(lines), ok):
             doc = yaml.safe_load(text) or {}
-            for index in indexes:
-                doc["rules"][index]["enabled"] = enabled
+            rewrite(doc)
             _write_yaml(path, doc)
         self.reload(force=True)
 
@@ -276,34 +286,81 @@ class Policy:
         self.reload(force=True)
         return filename
 
-    def append_rule(self, filename: str, rule: Rule) -> None:
-        path = os.path.join(self.rulesets_dir, filename)
-        entry = {"match": rule.match, "action": rule.action}
-        if rule.path:
-            entry["path"] = rule.path
-        if rule.note:
-            entry["note"] = rule.note
+    def set_rule_action(self, filename: str, index: int, action: str) -> None:
+        """Swap one rule between allow, deny and tunnel, in place."""
+        if action not in ("allow", "deny", "tunnel"):
+            raise ValueError(f"unknown action: {action}")
+        self._edit_rules(
+            filename, [index],
+            lambda lines, span: _set_item_key(lines, *span, "action", action),
+            lambda doc: doc["rules"][index].get("action") == action,
+            lambda doc: doc["rules"][index].update(action=action),
+        )
 
+    def set_rule_note(self, filename: str, index: int, note: str) -> None:
+        """Retitle one rule, in place, comments and neighbours untouched."""
+        note = (note or "").strip()
+        self._edit_rules(
+            filename, [index],
+            lambda lines, span: _set_item_key(lines, *span, "note", _scalar(note)),
+            lambda doc: (doc["rules"][index].get("note") or "") == note,
+            lambda doc: doc["rules"][index].update(note=note),
+        )
+
+    def append_rule(self, filename: str, rule: Rule) -> None:
+        self.append_rules(filename, [rule])
+
+    def append_rules(self, filename: str, rules: list[Rule]) -> None:
+        """Add rules to the end of a ruleset, in one write.
+
+        A whole row of drafts from the UI arrives together, so the file is
+        written once rather than once per rule.
+        """
+        path = os.path.join(self.rulesets_dir, filename)
         if not os.path.exists(path):
             # Rulesets are made by create_ruleset, which names and describes
             # them. Conjuring one here would leave a file with no name in it.
             raise KeyError(filename)
+        if not rules:
+            return
+
+        entries = []
+        for rule in rules:
+            if not (rule.match or "").strip():
+                raise ValueError("a rule needs a host to match")
+            if rule.action not in ("allow", "deny", "tunnel"):
+                raise ValueError(f"unknown action: {rule.action}")
+            entry = {"match": rule.match.strip(), "action": rule.action}
+            if rule.path:
+                entry["path"] = rule.path
+            if rule.note:
+                entry["note"] = rule.note
+            entries.append(entry)
+
         text = open(path).read()
         doc = yaml.safe_load(text) or {}
         before = len(doc.get("rules") or [])
 
-        # Appended as a line, for the same reason set_enabled edits one: the
+        # Appended as lines, for the same reason set_enabled edits one: the
         # comments in these files are the user's. It only lands correctly when
         # `rules:` is the last key, so the result is parsed before it is kept
         # and a file shaped otherwise falls back to the rewrite.
         indent = re.findall(r"^(\s*)- ", text, re.MULTILINE)
-        line = indent[-1] if indent else "  "
-        flow = yaml.safe_dump(entry, default_flow_style=True, sort_keys=False).strip()
-        candidate = text + ("" if text.endswith("\n") else "\n") + f"{line}- {flow}\n"
+        lead = indent[-1] if indent else "  "
+        candidate = text + ("" if text.endswith("\n") else "\n")
+        for entry in entries:
+            # width=inf: a flow mapping that wrapped would still parse, but it
+            # would no longer be one line, and the line edits that toggle and
+            # retitle a rule work a line at a time.
+            flow = yaml.safe_dump(entry, default_flow_style=True, sort_keys=False,
+                                  width=10 ** 9).strip()
+            candidate += f"{lead}- {flow}\n"
 
-        if not _write_checked(path, candidate,
-                              lambda new: len(new.get("rules") or []) == before + 1):
-            doc.setdefault("rules", []).append(entry)
+        if not _write_checked(
+            path, candidate,
+            lambda new: len(new.get("rules") or []) == before + len(entries),
+        ):
+            doc.setdefault("rules", []).extend(entries)
             _write_yaml(path, doc)
         self.reload(force=True)
 
@@ -459,6 +516,10 @@ class PendingQueue:
         return [e.as_json() for e in self.entries.values()]
 
 
+def _scalar(text: str) -> str:
+    return yaml.safe_dump(text or "", default_style='"').strip()
+
+
 def _rule_spans(lines: list[str]) -> list[tuple[int, int]]:
     """The first and last line of each item under `rules:`.
 
@@ -482,25 +543,27 @@ def _rule_spans(lines: list[str]) -> list[tuple[int, int]]:
     return [(start, end) for start, end in spans]
 
 
-def _set_item_enabled(lines: list[str], start: int, end: int, enabled: bool) -> None:
-    value = "true" if enabled else "false"
-
+def _set_item_key(lines: list[str], start: int, end: int, key: str, raw: str) -> None:
+    """Set one key on one rule, in whichever style that rule is written in."""
     flow = re.match(r"^(\s*)-\s*\{(.*)\}\s*$", lines[start])
     if flow:
         indent, inner = flow.groups()
-        inner = re.sub(r",?\s*enabled:\s*\S+", "", inner).strip().rstrip(",")
-        lines[start] = f"{indent}- {{{inner}, enabled: {value}}}"
+        # A quoted value can hold a comma, so the existing pair is removed by
+        # splitting on the key rather than by a blind comma split.
+        inner = re.sub(rf",?\s*{key}:\s*(\"(?:[^\"\\\\]|\\\\.)*\"|[^,}}]*)", "", inner)
+        inner = inner.strip().strip(",").strip()
+        lines[start] = f"{indent}- {{{inner}, {key}: {raw}}}"
         return
 
     for number in range(start, end + 1):
-        if re.match(r"^\s*(-\s+)?enabled:", lines[number]):
-            lines[number] = re.sub(r"enabled:.*", f"enabled: {value}", lines[number])
+        if re.match(rf"^\s*(-\s+)?{key}:", lines[number]):
+            lines[number] = re.sub(rf"{key}:.*", f"{key}: {raw}", lines[number])
             return
 
     content = [n for n in range(start, end + 1)
                if lines[n].strip() and not lines[n].lstrip().startswith("#")]
     indent = re.match(r"^(\s*)", lines[start]).group(1) + "  "
-    lines.insert(content[-1] + 1, f"{indent}enabled: {value}")
+    lines.insert(content[-1] + 1, f"{indent}{key}: {raw}")
 
 
 def _write_checked(path: str, text: str, ok) -> bool:

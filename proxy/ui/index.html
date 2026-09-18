@@ -86,7 +86,9 @@
   .plain { border: 0; background: transparent; padding: .1rem .3rem .1rem 0;
            font: inherit; color: inherit; }
   .plain:hover { color: var(--accent); }
-  tr.rule { cursor: pointer; user-select: none; }
+  tr.rule { user-select: none; }
+  td.grab { cursor: pointer; }
+  td.swap { cursor: ew-resize; }
   tr.rule.off td:not(:first-child) { opacity: .45; text-decoration: line-through; }
   .save { display: inline-flex; gap: .4rem; align-items: center; padding: .2rem .5rem;
           border: 1px dashed var(--line); border-radius: 6px; }
@@ -206,8 +208,10 @@
                  pressed, so tabbing between the two fields is not a commit.
                  Outside that, a click anywhere on the row's text expands it. -->
             <template v-if="r.renaming">
-              <input v-focus v-model="r.name" size="18" @keyup.enter="saveRuleset(r)">
-              <input v-model="r.description" size="44" @keyup.enter="saveRuleset(r)">
+              <input v-focus v-model="r.name" size="18"
+                     @keyup.enter="saveRuleset(r)" @keyup.esc="cancelRename(r)">
+              <input v-model="r.description" size="44"
+                     @keyup.enter="saveRuleset(r)" @keyup.esc="cancelRename(r)">
               <button class="primary" @click="saveRuleset(r)">save</button>
               <button @click="cancelRename(r)">cancel</button>
             </template>
@@ -224,18 +228,79 @@
             </template>
             <table v-if="r.open" class="rules">
               <tbody>
+              <tr>
+                <th style="width:1%">on</th>
+                <th style="width:1%">action</th>
+                <th>host</th>
+                <th>path</th>
+                <th>note</th>
+              </tr>
               <!-- Press on a rule and drag across the others to paint them all
                    to the state the first one flipped to. -->
+              <!-- The checkbox, the host and the path are the toggle: press on
+                   one and drag down the column to paint a run of rules. The
+                   action swaps on a double click, and the note is text to edit,
+                   so neither of those starts a drag. -->
               <tr v-for="(rule, i) in r.detail" :key="i" class="rule"
-                  :class="{off: !rule.enabled}"
-                  @mousedown.prevent="paintStart(r, i)" @mouseenter="paintOver(r, i)">
-                <td style="width:1%">
+                  :class="{off: !rule.enabled}">
+                <td class="grab" style="width:1%"
+                    @mousedown.prevent="paintStart(r, i)" @mouseenter="paintOver(r, i)">
                   <input type="checkbox" :checked="rule.enabled"
                          @mousedown.stop @change="toggleRule(r, i, $event)">
                 </td>
-                <td :class="rule.action" style="width:1%">{{ rule.action }}</td>
-                <td class="mono">{{ rule.match }}<span v-if="rule.path">{{ rule.path }}</span></td>
-                <td class="dim">{{ rule.note }}</td>
+                <td :class="rule.action" class="swap" style="width:1%"
+                    :title="'double click to make this ' + (rule.action === 'deny' ? 'allow' : 'deny')"
+                    @dblclick="swapAction(r, i)">{{ rule.action }}</td>
+                <td class="mono grab"
+                    @mousedown.prevent="paintStart(r, i)" @mouseenter="paintOver(r, i)">
+                  {{ rule.match }}
+                </td>
+                <td class="mono dim grab"
+                    @mousedown.prevent="paintStart(r, i)" @mouseenter="paintOver(r, i)">
+                  {{ rule.path || '' }}
+                </td>
+                <!-- mousedown is stopped here so that clicking into the note
+                     edits it rather than starting a paint; a drag that passes
+                     over the cell still toggles the row. -->
+                <td class="dim">
+                  <input v-if="rule.editing" v-focus v-model="rule.note" size="34"
+                         @keyup.enter="saveNote(r, i)" @keyup.esc="cancelNote(rule)"
+                         @blur="saveNote(r, i)">
+                  <span v-else @click="editNote(rule)">
+                    {{ rule.note || 'note this rule' }}
+                  </span>
+                </td>
+              </tr>
+              <!-- The blank row at the end grows another one as soon as it has
+                   a pattern in it, so several rules can be typed in a run and
+                   committed together. -->
+              <tr v-for="(d, j) in r.draft" :key="'draft' + j" @mousedown.stop>
+                <td></td>
+                <td>
+                  <select v-model="d.action">
+                    <option>allow</option>
+                    <option>deny</option>
+                  </select>
+                </td>
+                <td>
+                  <input v-model="d.match" size="22" placeholder="host, or *.host"
+                         @input="growDraft(r)">
+                </td>
+                <td>
+                  <input v-model="d.path" size="16" placeholder="/any/path/*">
+                </td>
+                <td>
+                  <input v-model="d.note" size="26" placeholder="what it is for">
+                </td>
+              </tr>
+              <tr v-if="drafted(r).length">
+                <td></td>
+                <td colspan="4">
+                  <button class="primary" @click="saveDrafts(r)">
+                    save {{ drafted(r).length }} new
+                  </button>
+                  <button @click="r.draft = [blankRule()]">discard</button>
+                </td>
               </tr>
               </tbody>
             </table>
@@ -245,7 +310,7 @@
       </table>
       <div class="row" style="margin-top:.6rem">
         <input v-model="newRuleset" placeholder="name a new ruleset"
-               @keyup.enter="create">
+               @keyup.enter="create" @keyup.esc="newRuleset = ''; error = ''">
         <button @click="create" :disabled="!newRuleset.trim()">New ruleset</button>
         <span class="deny" v-if="error">{{ error }}</span>
       </div>
@@ -257,6 +322,8 @@
 <script>
 const LOG_MAX = 2000;  // the server's ring is 5000; this is one screen's worth
                        // of scrollback, kept small so the page stays quick.
+
+const blankRule = () => ({action: 'allow', match: '', path: '', note: ''});
 
 const api = async (path, options) => {
   const response = await fetch(path, options);
@@ -306,10 +373,25 @@ const app = Vue.createApp({
 
   methods: {
     async loadPolicy() {
+      // Every write emits a state event and every state event lands here, so
+      // what the operator has open has to survive a reload of the policy —
+      // otherwise toggling a rule closes the ruleset it is in.
+      const open = Object.fromEntries(this.rulesets.map(r => [r.file, r]));
       const policy = await api('/api/policy');
       this.mode = policy.mode;
-      this.rulesets = policy.rulesets.map(r =>
-        Object.assign({open: false, renaming: false, was: null, detail: []}, r));
+      this.rulesets = policy.rulesets.map(r => {
+        const was = open[r.file];
+        return Object.assign(
+          {open: false, renaming: false, was: null, detail: [], draft: [blankRule()]},
+          was && {open: was.open, renaming: was.renaming, was: was.was,
+                  detail: was.detail, draft: was.draft},
+          r);
+      });
+      await Promise.all(this.rulesets.filter(r => r.open).map(r => this.loadRules(r)));
+    },
+    async loadRules(ruleset) {
+      const rules = (await api('/api/rulesets/' + ruleset.file)).rules;
+      ruleset.detail = rules.map(rule => Object.assign({editing: false, was: null}, rule));
     },
     async loadLog() { this.log = (await api('/api/log')).log; },
     async loadPending() {
@@ -379,9 +461,69 @@ const app = Vue.createApp({
         this.saveRules(paint.file, [...paint.indexes], paint.enabled);
       }
     },
+    async swapAction(ruleset, index) {
+      const rule = ruleset.detail[index];
+      if (rule.action !== 'allow' && rule.action !== 'deny') return;  // leave tunnel alone
+      const action = rule.action === 'allow' ? 'deny' : 'allow';
+      rule.action = action;
+      this.error = '';
+      try {
+        await put('/api/rulesets/' + ruleset.file + '/rules', {index, action});
+      } catch (e) {
+        this.error = e.message;
+        await this.loadRules(ruleset);
+      }
+    },
     toggleRule(ruleset, index, event) {
       ruleset.detail[index].enabled = event.target.checked;
       this.saveRules(ruleset.file, [index], event.target.checked);
+    },
+    blankRule,
+    drafted(ruleset) {
+      return ruleset.draft.filter(d => d.match.trim());
+    },
+    growDraft(ruleset) {
+      const last = ruleset.draft[ruleset.draft.length - 1];
+      if (last.match.trim()) ruleset.draft.push(blankRule());
+    },
+    async saveDrafts(ruleset) {
+      const rules = this.drafted(ruleset).map(d => ({
+        action: d.action, match: d.match.trim(),
+        path: d.path.trim() || null, note: d.note.trim(),
+      }));
+      this.error = '';
+      try {
+        await api('/api/rulesets/' + ruleset.file + '/rules', {
+          method: 'POST', headers: {'content-type': 'application/json'},
+          body: JSON.stringify({rules}),
+        });
+        ruleset.draft = [blankRule()];
+      } catch (e) {
+        this.error = e.message;  // the drafts stay put, to be fixed and retried
+      }
+      await this.loadPolicy();  // the rule count moved
+    },
+    editNote(rule) {
+      rule.was = rule.note;
+      rule.editing = true;
+    },
+    cancelNote(rule) {
+      // Before the input goes away, so the blur it fires finds nothing to save.
+      rule.editing = false;
+      rule.note = rule.was;
+    },
+    async saveNote(ruleset, index) {
+      const rule = ruleset.detail[index];
+      if (!rule.editing) return;  // blur fires again after Enter
+      rule.editing = false;
+      this.error = '';
+      try {
+        await put('/api/rulesets/' + ruleset.file + '/rules',
+                  {index, note: rule.note});
+      } catch (e) {
+        this.error = e.message;
+        await this.loadRules(ruleset);
+      }
     },
     async saveRules(file, indexes, enabled) {
       this.error = '';
@@ -417,9 +559,7 @@ const app = Vue.createApp({
     },
     async expand(ruleset) {
       ruleset.open = !ruleset.open;
-      if (ruleset.open && !ruleset.detail.length) {
-        ruleset.detail = (await api('/api/rulesets/' + ruleset.file)).rules;
-      }
+      if (ruleset.open && !ruleset.detail.length) await this.loadRules(ruleset);
     },
     async resolve(entry, decision, save) {
       await api('/api/pending/' + entry.key, {

@@ -277,6 +277,71 @@ def test_toggling_rules_keeps_both_styles_and_the_comments():
     assert [r.enabled for r in Policy(directory).rulesets["m.yml"].rules] == [True] * 3
 
 
+def test_set_rule_action():
+    directory = state({"m.yml": MIXED})
+    p = Policy(directory)
+    assert [r.action for r in p.rulesets["m.yml"].rules] == ["allow", "deny", "allow"]
+
+    p.set_rule_action("m.yml", 0, "deny")    # block style
+    p.set_rule_action("m.yml", 2, "deny")    # flow style
+    p.set_rule_action("m.yml", 1, "allow")
+
+    text = open(os.path.join(directory, "rulesets", "m.yml")).read()
+    assert "# a ruleset written by hand" in text, text
+
+    fresh = Policy(directory).rulesets["m.yml"]
+    assert [r.action for r in fresh.rules] == ["deny", "allow", "deny"]
+    assert [r.match for r in fresh.rules] == [
+        "a.example.com", "b.example.com", "c.example.com"]
+    assert [r.note for r in fresh.rules] == ["first", "second", "third"]
+
+    # ...and the swap is what decides, not the order it used to have.
+    assert Policy(directory).decide("a.example.com", "/")[0] == "deny"
+    assert Policy(directory).decide("b.example.com", "/")[0] == "allow"
+
+    for bad in ("maybe", "", None):
+        try:
+            p.set_rule_action("m.yml", 0, bad)
+            assert False, f"accepted {bad!r}"
+        except ValueError:
+            pass
+
+
+def test_set_rule_note():
+    directory = state({"m.yml": MIXED})
+    p = Policy(directory)
+
+    p.set_rule_note("m.yml", 0, "the block one, renamed")     # block style
+    p.set_rule_note("m.yml", 2, "the flow one, renamed")      # flow style
+    # A note with the punctuation that would end a flow mapping.
+    p.set_rule_note("m.yml", 1, "commas, and a {brace}: kept")
+
+    text = open(os.path.join(directory, "rulesets", "m.yml")).read()
+    assert "# a ruleset written by hand" in text, text
+    assert "# the flow form" in text, text
+
+    fresh = Policy(directory).rulesets["m.yml"]
+    assert [r.note for r in fresh.rules] == [
+        "the block one, renamed", "commas, and a {brace}: kept", "the flow one, renamed"]
+    assert [r.match for r in fresh.rules] == [
+        "a.example.com", "b.example.com", "c.example.com"]
+    assert [r.action for r in fresh.rules] == ["allow", "deny", "allow"]
+
+    # A note edit and a toggle do not tread on each other.
+    p.set_rules_enabled("m.yml", [2], False)
+    p.set_rule_note("m.yml", 2, "off, and renamed again")
+    again = Policy(directory).rulesets["m.yml"].rules[2]
+    assert (again.note, again.enabled, again.match) == (
+        "off, and renamed again", False, "c.example.com")
+
+    for bad in (-1, 3, 99):
+        try:
+            p.set_rule_note("m.yml", bad, "nowhere")
+            assert False, f"accepted index {bad}"
+        except IndexError:
+            pass
+
+
 def test_set_description():
     directory = state({"m.yml": MIXED})
     p = Policy(directory)
@@ -348,6 +413,64 @@ def test_create_ruleset():
     # The filename never comes from the input itself.
     assert p.create_ruleset("../../etc/passwd") == "etc-passwd.yml"
     assert os.path.exists(os.path.join(directory, "rulesets", "etc-passwd.yml"))
+
+
+def test_append_rules_in_one_write():
+    directory = state({"m.yml": MIXED})
+    p = Policy(directory)
+    p.append_rules("m.yml", [
+        Rule(match="one.example.com", action="allow", note="first draft"),
+        Rule(match="*.two.example.com", action="deny", note="second, with a comma"),
+    ])
+
+    text = open(os.path.join(directory, "rulesets", "m.yml")).read()
+    assert "# a ruleset written by hand" in text, text
+
+    fresh = Policy(directory)
+    assert len(fresh.rulesets["m.yml"].rules) == 5
+    assert fresh.decide("one.example.com", "/")[0] == "allow"
+    assert fresh.decide("x.two.example.com", "/")[0] == "deny"
+    assert fresh.rulesets["m.yml"].rules[4].note == "second, with a comma"
+
+    # A draft with no host, or an action nobody defined, is refused whole:
+    # nothing of the batch lands.
+    for bad in ([Rule(match="  ", action="allow")],
+                [Rule(match="ok.example.com", action="maybe")],
+                [Rule(match="ok.example.com", action="allow"), Rule(match="", action="deny")]):
+        try:
+            p.append_rules("m.yml", bad)
+            assert False, f"accepted {bad}"
+        except ValueError:
+            pass
+    assert len(Policy(directory).rulesets["m.yml"].rules) == 5
+
+    assert p.append_rules("m.yml", []) is None  # nothing to do, nothing written
+
+
+def test_a_long_rule_stays_on_one_line():
+    # Long enough that safe_dump would wrap it at its default width, which
+    # would take the rule out of reach of the line edits below.
+    directory = state({"m.yml": MIXED})
+    p = Policy(directory)
+    p.append_rules("m.yml", [Rule(
+        match="registry.npmjs.org", action="deny", path="/@some-rather-long-scope/*",
+        note="never fetch the private scope from the public registry, not once",
+    )])
+
+    lines = [l for l in open(os.path.join(directory, "rulesets", "m.yml")) if "npmjs" in l]
+    assert len(lines) == 1, lines
+    assert lines[0].rstrip().endswith("}"), lines
+
+    # ...so toggling and retitling it still edit lines rather than falling back
+    # to the rewrite that would drop the comments.
+    p.set_rules_enabled("m.yml", [3], False)
+    p.set_rule_note("m.yml", 3, "off for now")
+    text = open(os.path.join(directory, "rulesets", "m.yml")).read()
+    assert "# a ruleset written by hand" in text, text
+
+    rule = Policy(directory).rulesets["m.yml"].rules[3]
+    assert (rule.enabled, rule.note, rule.path) == (
+        False, "off for now", "/@some-rather-long-scope/*")
 
 
 def test_append_rule_keeps_the_file_loadable():

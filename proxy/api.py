@@ -165,24 +165,53 @@ class Rulesets(Base):
 
 
 class Rules(Base):
-    """Enable or disable rules of one ruleset, a whole drag at a time."""
+    """Add rules to a ruleset, and enable, disable or retitle the ones there."""
+
+    def post(self, filename):
+        if filename not in self.ctx.policy.rulesets:
+            raise tornado.web.HTTPError(404, reason="no such ruleset")
+        from policy import Rule
+
+        try:
+            rules = [
+                Rule(match=r.get("match", ""), action=r.get("action", "allow"),
+                     path=r.get("path") or None, note=r.get("note", ""))
+                for r in self.body().get("rules") or []
+            ]
+            self.ctx.policy.append_rules(filename, rules)
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise tornado.web.HTTPError(400, reason=str(exc) or "malformed rule")
+        self.ctx.log.event("state", {"ruleset": filename})
+        self.write({"ok": True, "rules": len(rules)})
 
     def put(self, filename):
         if filename not in self.ctx.policy.rulesets:
             raise tornado.web.HTTPError(404, reason="no such ruleset")
         body = self.body()
         try:
-            indexes = [int(i) for i in body.get("indexes") or []]
-        except (TypeError, ValueError):
-            raise tornado.web.HTTPError(400, reason="indexes must be whole numbers")
-        if not indexes:
-            raise tornado.web.HTTPError(400, reason="no rules named")
-        try:
-            self.ctx.policy.set_rules_enabled(filename, indexes, bool(body.get("enabled")))
+            if "note" in body:
+                self.ctx.policy.set_rule_note(filename, int(body["index"]), body["note"])
+                touched = 1
+            elif "action" in body:
+                self.ctx.policy.set_rule_action(filename, int(body["index"]), body["action"])
+                touched = 1
+            else:
+                indexes = [int(i) for i in body.get("indexes") or []]
+                if not indexes:
+                    raise tornado.web.HTTPError(400, reason="no rules named")
+                self.ctx.policy.set_rules_enabled(filename, indexes, bool(body.get("enabled")))
+                touched = len(indexes)
+        except (TypeError, ValueError, KeyError) as exc:
+            # The policy's own message says which rule or action was wrong;
+            # only a missing or unparsable index has nothing to say for itself.
+            raise tornado.web.HTTPError(
+                400, reason=str(exc) if isinstance(exc, ValueError) and str(exc)
+                else "index and indexes must be whole numbers"
+            )
         except IndexError as exc:
             raise tornado.web.HTTPError(404, reason=str(exc))
         self.ctx.log.event("state", {"ruleset": filename})
-        self.write({"ok": True, "rules": len(indexes)})
+        self.write({"ok": True, "rules": touched})
 
 
 class Pending(Base):
@@ -256,7 +285,11 @@ class Index(tornado.web.RequestHandler):
             "  GET  /api/rulesets/<file>\n"
             "                          PUT {\"name\": \"...\", \"enabled\": true,\n"
             "                               \"description\": \"...\"}\n"
+            "  POST /api/rulesets/<file>/rules {\"rules\": [{\"match\": \"...\",\n"
+            "                               \"action\": \"allow\", \"note\": \"...\"}]}\n"
             "  PUT  /api/rulesets/<file>/rules {\"indexes\": [0, 2], \"enabled\": false}\n"
+            "                          or {\"index\": 0, \"note\": \"...\"}\n"
+            "                          or {\"index\": 0, \"action\": \"deny\"}\n"
             "  GET  /api/pending       POST /api/pending/<key> {\"decision\": \"allow\"}\n"
             "  GET  /api/log           GET /api/events (SSE)\n"
         )
