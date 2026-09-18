@@ -327,6 +327,27 @@ class Policy:
             lambda doc: doc["rules"][index].update({key: want}),
         )
 
+    def delete_rule(self, filename: str, index: int) -> None:
+        """Remove one rule and the lines it owns, the other rules untouched.
+
+        A comment sitting between two rules belongs to the span of the one
+        above it, so deleting a rule takes the comments written under it with
+        it — which is where a note about that rule is.
+        """
+        path = os.path.join(self.rulesets_dir, filename)
+        before = (yaml.safe_load(open(path).read()) or {}).get("rules") or []
+        want = [r for i, r in enumerate(before) if i != index]
+
+        def cut(lines, span):
+            del lines[span[0]:span[1] + 1]
+
+        self._edit_rules(
+            filename, [index],
+            cut,
+            lambda doc: (doc.get("rules") or []) == want,
+            lambda doc: doc["rules"].pop(index),
+        )
+
     def append_rule(self, filename: str, rule: Rule) -> None:
         self.append_rules(filename, [rule])
 

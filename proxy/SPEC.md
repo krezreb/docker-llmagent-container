@@ -738,6 +738,7 @@ switched off its own sandbox with one HTTP call.
 | `GET` | `/api/rulesets` | Every ruleset with its enabled state, rule count and description. |
 | `GET` | `/api/rulesets/<name>` | One ruleset, with its rules. |
 | `PUT` | `/api/rulesets/<name>` | `{"enabled": true \| false}`. |
+| `DELETE` | `/api/rulesets/<name>/rules?index=` | Remove one rule by its position in the file. The other rules and the file's comments are left as they were; the comments written under the deleted rule go with it. Not undoable, so the UI asks first. |
 | `GET` | `/api/pending` | Currently held asks, each with its key, method, URL, category, clients and waiter count. |
 | `POST` | `/api/pending/<key>` | `{"decision":"allow" \| "deny", "save_to":"<ruleset>", "scope":"host" \| "host+path", "enable":true}`. `<key>` is the ask key of section 8.3, so one call resolves every request waiting on it. `enable` switches the disabled allow rule the entry reports in `disabled_allow` (and its ruleset, if that is what is off) back on instead of saving a second rule for the same host. |
 
