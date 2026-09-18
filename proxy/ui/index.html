@@ -82,6 +82,11 @@
   .pill + .pill { border-left: 1px solid var(--line); }
   .pill:hover { background: var(--panel); color: var(--fg); }
   .pill.on { background: var(--accent); color: #fff; }
+  /* Named outright, because system-ui alone leaves the radiation sign to a
+     text font on some Linux desktops and it comes out as a hollow outline. */
+  .icon { margin-right: .35rem;
+          font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji",
+                       system-ui, sans-serif; }
   /* Full-width row of the wrapping header, so the hint sits under the pills. */
   .hint { flex-basis: 100%; margin: -.3rem 0 0; color: var(--dim); font-size: .85rem; }
   .rules { margin: .4rem 0 0; }
@@ -113,7 +118,10 @@
       <button v-for="m in modes" :key="m.value" class="pill"
               :class="{on: mode === m.value}" @click="setMode(m.value)"
               @mouseenter="hover = m.value" @mouseleave="hover = ''">
-        {{ m.label }}
+        <!-- The sign is decoration beside a label that already says the same
+             thing, so it is hidden from a screen reader rather than read out
+             as "green circle Default-Allow". -->
+        <span class="icon" aria-hidden="true">{{ m.icon }}</span>{{ m.label }}
       </button>
     </span>
     <span class="live" :class="connected ? 'on' : 'off'">
@@ -359,15 +367,18 @@ const put = (path, body) => api(path, {
 const app = Vue.createApp({
   data: () => ({
     // The labels are the UI's; the values are the API's, and they differ only
-    // in case and spacing.
+    // in case and spacing. The icon is what the pill is recognised by across
+    // the room; it is a separate field so the label stays the searchable text.
+    // Lockdown's sign carries a variation selector, without which it is drawn
+    // as a line-art glyph rather than as an emoji.
     modes: [
-      {value: 'default-allow', label: 'Default-Allow',
+      {value: 'default-allow', icon: '\ud83d\udfe2', label: 'Default-Allow',
        hint: 'Allow all traffic unless specifically denied.'},
-      {value: 'default-deny', label: 'Default-Deny',
+      {value: 'default-deny', icon: '\ud83d\udec2', label: 'Default-Deny',
        hint: 'Block traffic unless specifically allowed \u2014 prompt here to allow.'},
-      {value: 'lockdown', label: 'Lockdown',
+      {value: 'lockdown', icon: '\u2622\ufe0f', label: 'Lockdown',
        hint: 'No egress traffic allowed.'},
-      {value: 'log-only', label: 'Log-only',
+      {value: 'log-only', icon: '\ud83d\udd2d', label: 'Log-only',
        hint: 'Allow all traffic, even if in deny rules.'},
     ],
     hover: '',
