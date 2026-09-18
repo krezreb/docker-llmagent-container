@@ -507,13 +507,50 @@ if [[ -n "$host_net" ]]; then
 else
     docker_args+=(--hostname "$hostname")
 
-    # The internal network compose creates, in place of the default bridge.
+    #
+    # One internal network per container, in place of the default bridge, with
+    # the proxy attached to it.
+    #
+    # Not the single 'agents' network compose creates: a docker bridge has
+    # container-to-container traffic enabled by default, so two agents sharing
+    # one can reach each other by IP and by container name. 'internal: true'
+    # only removes the route out - it does not isolate the members from one
+    # another. Turning that off with enable_icc=false is not the fix either,
+    # because it drops agent-to-proxy traffic along with agent-to-agent, and
+    # the proxy is the only thing on the network worth reaching.
+    #
+    # A network per container leaves the proxy as the only reachable host and
+    # costs nothing else: the proxy's name resolves on every network it joins,
+    # and the reverse lookup that names the client in the log still answers
+    # '<container>.<network>' from the proxy's side.
+    #
     # --hostname is still passed, as it is on the default bridge today.
-    [[ -z "$proxy" ]] || docker_args+=(--network dev-agent_agents)
+    if [[ -n "$proxy" ]]; then
+        agent_net="${container_name}-net"
+
+        # A run killed hard leaves its network behind, and PIDs are reused.
+        # --force is a no-op when there is nothing there.
+        docker network rm --force "$agent_net" >/dev/null 2>&1
+
+        docker network create --internal "$agent_net" >/dev/null ||
+            die "could not create the agent network $agent_net"
+
+        # Removed on the way out rather than left for the next run to reap,
+        # so that 'docker network ls' is not a list of dead sessions.
+        trap 'docker network disconnect "$agent_net" dev-agent-proxy >/dev/null 2>&1
+              docker network rm --force "$agent_net" >/dev/null 2>&1' EXIT
+
+        docker network connect "$agent_net" dev-agent-proxy ||
+            die "could not attach the proxy to $agent_net"
+
+        docker_args+=(--network "$agent_net")
+    fi
 fi
 
 docker_args+=("${proxy_args[@]}")
 docker_args+=("${extra_mounts[@]}")
 docker_args+=("$IMAGE" "$agent" "$@")
 
-exec docker "${docker_args[@]}"
+# Not exec'd: the EXIT trap that removes the agent network has to outlive
+# docker run. The exit status is docker's either way.
+docker "${docker_args[@]}"

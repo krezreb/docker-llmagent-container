@@ -68,7 +68,7 @@ otherwise grow without limit.
 
 The enforcement boundary is the docker network, not the proxy configuration. The
 agent container is attached only to a network created with `internal: true`, which
-has no gateway to the outside. The `HTTP_PROXY`/`HTTPS_PROXY` environment variables
+has no gateway to the outside, and which it shares with nothing but the proxy. The `HTTP_PROXY`/`HTTPS_PROXY` environment variables
 are a *convenience*, telling well-behaved clients where the proxy is. If the agent
 unsets them, it gets no network, not free network. The failure mode is closed.
 
@@ -129,21 +129,51 @@ traffic. An agent can still talk to itself.
   :8099  ───────────┤    mitmproxy          :3128          ├────── internet
   (web UI + API)    │    web UI + full API  :8099          │      (network: egress)
                     │    read-only API      :8098          │
-                    └──────────────┬───────────────────────┘
-                                   │
-                        network: agents (internal: true)
-                                   │
-                    ┌──────────────┴───────────────────────┐
-                    │  dev-agent-claude-4711               │
-                    │  no route to the internet            │
-                    └──────────────────────────────────────┘
+                    └───────┬──────────────────┬───────┘
+                            │                  │
+       dev-agent-claude-4711-net    dev-agent-codex-99-net
+          (internal: true)             (internal: true)
+                            │                  │
+        ┌───────────────────┴───┐  ┌────────────┴──────────┐
+        │ dev-agent-claude-4711 │  │ dev-agent-codex-99    │
+        │ no route out, and no  │  │ no route out, and no  │
+        │ route to the other    │  │ route to the other    │
+        └───────────────────────┘  └───────────────────────┘
 ```
 
-One long-lived proxy container serves every agent session on the host. It is not a
-per-session sidecar, and that is a constraint rather than a preference: `dev-agent`
-ends with `exec docker run ...`, so the wrapper process does not survive the
-container and has nowhere to hang teardown logic. A shared, `restart: unless-stopped`
-proxy needs no teardown.
+One long-lived proxy container serves every agent session on the host, and it is not
+a per-session sidecar: a shared, `restart: unless-stopped` proxy is up before the
+first session and stays up after the last, so nothing has to start it in the hot
+path or stop it afterwards.
+
+**One network per container, not one shared network.** A docker bridge has
+container-to-container traffic enabled by default, so two agents attached to one
+network can reach each other by IP and by container name, and `internal: true` does
+not change that — it removes the route out, not the reachability of the neighbours.
+Two agents running at once are two separate sessions, frequently on two different
+projects, and one reaching the other's listening ports is a channel this document
+would otherwise have to list in section 4.
+
+Turning docker's own switch off is not the fix. A network created with
+`com.docker.network.bridge.enable_icc=false` drops agent-to-proxy traffic along with
+agent-to-agent — measured on docker 29.8.1, where a container on such a network
+could reach neither a second container nor the proxy — and the proxy is the only
+thing on the network worth reaching, so that setting buys isolation by removing the
+feature.
+
+So `dev-agent` creates an `internal: true` network per container, named after it, and
+attaches the proxy to it. The cost is one `docker network create` and one
+`docker network connect` per session, and a teardown: the wrapper therefore runs
+`docker run` rather than `exec`-ing it, and removes the network from an `EXIT` trap.
+A session killed with `SIGKILL` leaves its network behind, which is why the next run
+under the same name removes it first.
+
+Nothing else changes. The proxy's name resolves on every network it joins, so
+`http://dev-agent-proxy:3128` is the same string it always was; the reverse lookup
+of section 10.1 still answers `<container>.<network>` from the proxy's side; and the
+subnet guard of section 11.3 derives the trusted subnet from the default route,
+which only `egress` carries, so an extra interface per session is untrusted by
+construction.
 
 ### 5.1 proxy/compose.yml
 
@@ -169,16 +199,17 @@ services:
       - "127.0.0.1:8099:8099"
     volumes:
       - ${DEV_AGENT_PROXY_STATE:-~/.local/share/dev-agent/proxy}:/state
-    networks: [egress, agents]
+    networks: [egress]
 
 networks:
   egress: {}
-  agents:
-    internal: true
 ```
 
-The project name is pinned so that `dev-agent` can name the network
-`dev-agent_agents` without asking compose for it.
+`egress` is the only network here. The internal networks are per container and
+outlive neither the session nor compose's knowledge of them, so they are
+`dev-agent`'s to create and remove, not compose's. The project name is pinned so
+that `docker compose -p dev-agent` and the container name `dev-agent-proxy` are the
+same on every run, whatever directory the installed compose file is invoked from.
 
 ### 5.2 State directory
 
@@ -317,8 +348,12 @@ Parsed in the `take_flags` case block alongside `--ro`, `--mirror`, `--workspace
    is still being generated.
 3a. Write `agent-ca/bundle.crt`: the trust store of `$IMAGE` with `agent-ca/ca.crt`
    appended, per section 5.2. Unconditionally, every run.
-4. Network: `--network dev-agent_agents` instead of the default bridge. `--hostname`
-   is still passed, as it is in the non-`--host-network` path today.
+4. Network: create `internal: true` network `<container name>-net`, attach
+   `dev-agent-proxy` to it, and run with `--network <container name>-net` instead of
+   the default bridge — one per container, per section 5. Remove it again from an
+   `EXIT` trap, which means `docker run` and not `exec docker run`; the exit status
+   is docker's either way. `--hostname` is still passed, as it is in the
+   non-`--host-network` path today.
 5. Mount the certificate directory read-only:
    `--mount type=bind,src=<state>/agent-ca,dst=/etc/dev-agent-ca,readonly`.
    `<state>/agent-ca`, never `<state>/ca` — the latter holds the CA private key.
@@ -626,7 +661,7 @@ The name comes from a reverse lookup of the peer address against docker's embedd
 resolver, and it is done **once per connection**, in the addon's `client_connected`
 hook, then carried on the connection for every request on it.
 
-Docker answers with the network appended — `dev-agent-claude-4711.dev-agent_agents`,
+Docker answers with the network appended — `dev-agent-claude-4711.dev-agent-claude-4711-net`,
 not `dev-agent-claude-4711`. `client` is the first label only. A container name
 cannot contain a dot, so taking everything before the first one is exact rather than
 a guess, and the network is a constant that would be noise in every record and in
@@ -709,8 +744,8 @@ never change it.
 
 ### 11.3 Why a subnet check, and not a loopback check
 
-Both ports are also reachable from the `agents` network, because the proxy is
-attached to that network — it has to be, or it could not proxy anything. Port `8098`
+Both ports are also reachable from the agent's own network, because the proxy is
+attached to it — it has to be, or it could not proxy anything. Port `8098`
 existing does not by itself stop an agent from opening `http://dev-agent-proxy:8099`
 and calling `PUT /api/mode`. So `8099` carries a source-address guard as well.
 
@@ -728,9 +763,9 @@ The guard is therefore inverted — deny by subnet rather than allow by loopback
 2. A peer inside that subnet is **trusted**. Every other peer is **untrusted**: it is
    served the 11.2 subset and `403` for everything else, exactly as if it had arrived
    on `8098`.
-3. That is the right way round because of how the two networks differ. `agents` is
-   `internal: true` and so has **no gateway**, which means it cannot carry the
-   default route; `egress` does. The published port SNATs the operator's traffic to
+3. That is the right way round because of how the two kinds of network differ. An
+   agent network is `internal: true` and so has **no gateway**, which means it
+   cannot carry the default route; `egress` does. The published port SNATs the operator's traffic to
    the `egress` bridge gateway, which is in the `egress` subnet by construction. So
    "the default route's subnet" is exactly "where the operator arrives from", and it
    is derived rather than named:
@@ -738,15 +773,17 @@ The guard is therefore inverted — deny by subnet rather than allow by loopback
    ```
    default via 172.22.0.1 dev eth0            <- egress, operator arrives from .0.1
    172.22.0.0/16 dev eth0 scope link  src 172.22.0.2
-   172.23.0.0/16 dev eth1 scope link  src 172.23.0.2   <- agents, no gateway
+   172.23.0.0/16 dev eth1 scope link  src 172.23.0.2   <- an agent, no gateway
    ```
 
-   Identifying the `agents` interface directly is the thing to avoid. Docker assigns
+   Identifying the agent interface directly is the thing to avoid. Docker assigns
    `eth0` and `eth1` in an order the container cannot rely on and neither name says
    which network it belongs to, so a proxy that hardcodes one, or guesses, is one
    restart away from trusting the agent. Deriving the trusted subnet from the default
-   route needs no such guess, and it stays correct if a third network is ever
-   attached: a new interface is untrusted until something gives it the default route.
+   route needs no such guess, and it has to stay correct as interfaces come and go,
+   because one network per agent session means the proxy gains and loses an
+   interface at every one: a new interface is untrusted until something gives it the
+   default route.
 
 **Fail closed.** If there is no default route at startup, or its interface has no
 address, no subnet is trusted: every peer is untrusted and the proxy logs the

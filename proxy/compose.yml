@@ -1,4 +1,4 @@
-name: dev-agent            # pins the network name to dev-agent_agents
+name: dev-agent
 
 services:
   proxy:
@@ -9,9 +9,10 @@ services:
       - "127.0.0.1:8099:8099"
     volumes:
       - ${DEV_AGENT_PROXY_STATE:-~/.local/share/dev-agent/proxy}:/state
-    networks: [egress, agents]
+    # egress only. The networks the agents are on are created one per
+    # container by dev-agent, which attaches this container to each of them,
+    # so that no two agents share one. See SPEC section 5.
+    networks: [egress]
 
 networks:
   egress: {}
-  agents:
-    internal: true
