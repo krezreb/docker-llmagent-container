@@ -15,16 +15,17 @@ import logging.handlers
 import os
 import sys
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 RING = 5000
 QUEUE = 1000
 ROTATE = 64 * 1024 * 1024  # per file, two files kept
 
 
-def now() -> str:
-    """RFC 3339 UTC with millisecond precision."""
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+def now(ago: float = 0.0) -> str:
+    """RFC 3339 UTC with millisecond precision, `ago` seconds in the past."""
+    stamp = datetime.now(timezone.utc) - timedelta(seconds=ago)
+    return stamp.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 class Log:
@@ -67,6 +68,52 @@ class Log:
         if self.file:
             self.file.info(line)
         self.event("request", rec)
+
+    def purge(self, before: str | None = None) -> int:
+        """Drop every record at or before `before`, or all of them when it is
+        None. Both the ring and the file, so a restart does not bring back what
+        the operator just cleared. Returns what left the ring; the file may
+        hold more than the ring does.
+
+        The timestamps are fixed-width UTC, so a string compare is the time
+        compare, the same one tail() makes.
+        """
+        before_count = len(self.ring)
+        kept = [rec for rec in self.ring if before and rec["ts"] > before]
+        self.ring.clear()
+        self.ring.extend(kept)
+        for handler in getattr(self.file, "handlers", []):
+            handler.acquire()
+            try:
+                handler.close()  # emit() reopens; a rewritten inode needs that
+                self._prune(handler.baseFilename, before)
+                self._prune(handler.baseFilename + ".1", before)
+            except OSError as exc:
+                warn(f"cannot purge {handler.baseFilename}: {exc}")
+            finally:
+                handler.release()
+        dropped = before_count - len(self.ring)
+        self.event("purge", {"before": before, "dropped": dropped})
+        return dropped
+
+    @staticmethod
+    def _prune(path: str, before: str | None) -> None:
+        """Rewrite one log file with only the records after `before`. Written
+        beside and renamed, so a crash half-way leaves the original."""
+        if not os.path.exists(path):
+            return
+        if before is None:
+            os.remove(path)
+            return
+        tmp = path + ".purge"
+        with open(path) as src, open(tmp, "w") as dst:
+            for line in src:
+                try:
+                    if json.loads(line)["ts"] > before:
+                        dst.write(line)
+                except (ValueError, KeyError):
+                    continue
+        os.replace(tmp, path)
 
     def event(self, kind: str, data) -> None:
         """Push to every connected UI. A subscriber that cannot keep up is
