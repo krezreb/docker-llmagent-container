@@ -282,9 +282,9 @@ def test_set_rule_action():
     p = Policy(directory)
     assert [r.action for r in p.rulesets["m.yml"].rules] == ["allow", "deny", "allow"]
 
-    p.set_rule_action("m.yml", 0, "deny")    # block style
-    p.set_rule_action("m.yml", 2, "deny")    # flow style
-    p.set_rule_action("m.yml", 1, "allow")
+    p.set_rule_field("m.yml", 0, "action", "deny")    # block style
+    p.set_rule_field("m.yml", 2, "action", "deny")    # flow style
+    p.set_rule_field("m.yml", 1, "action", "allow")
 
     text = open(os.path.join(directory, "rulesets", "m.yml")).read()
     assert "# a ruleset written by hand" in text, text
@@ -301,7 +301,7 @@ def test_set_rule_action():
 
     for bad in ("maybe", "", None):
         try:
-            p.set_rule_action("m.yml", 0, bad)
+            p.set_rule_field("m.yml", 0, "action", bad)
             assert False, f"accepted {bad!r}"
         except ValueError:
             pass
@@ -311,10 +311,10 @@ def test_set_rule_note():
     directory = state({"m.yml": MIXED})
     p = Policy(directory)
 
-    p.set_rule_note("m.yml", 0, "the block one, renamed")     # block style
-    p.set_rule_note("m.yml", 2, "the flow one, renamed")      # flow style
+    p.set_rule_field("m.yml", 0, "note", "the block one, renamed")     # block style
+    p.set_rule_field("m.yml", 2, "note", "the flow one, renamed")      # flow style
     # A note with the punctuation that would end a flow mapping.
-    p.set_rule_note("m.yml", 1, "commas, and a {brace}: kept")
+    p.set_rule_field("m.yml", 1, "note", "commas, and a {brace}: kept")
 
     text = open(os.path.join(directory, "rulesets", "m.yml")).read()
     assert "# a ruleset written by hand" in text, text
@@ -329,16 +329,50 @@ def test_set_rule_note():
 
     # A note edit and a toggle do not tread on each other.
     p.set_rules_enabled("m.yml", [2], False)
-    p.set_rule_note("m.yml", 2, "off, and renamed again")
+    p.set_rule_field("m.yml", 2, "note", "off, and renamed again")
     again = Policy(directory).rulesets["m.yml"].rules[2]
     assert (again.note, again.enabled, again.match) == (
         "off, and renamed again", False, "c.example.com")
 
     for bad in (-1, 3, 99):
         try:
-            p.set_rule_note("m.yml", bad, "nowhere")
+            p.set_rule_field("m.yml", bad, "note", "nowhere")
             assert False, f"accepted index {bad}"
         except IndexError:
+            pass
+
+
+def test_set_rule_match_and_path():
+    directory = state({"m.yml": MIXED})
+    p = Policy(directory)
+
+    p.set_rule_field("m.yml", 0, "match", "*.example.com")   # block style
+    p.set_rule_field("m.yml", 0, "path", "/api/*")
+    p.set_rule_field("m.yml", 2, "path", "/flow/*")          # flow style
+
+    text = open(os.path.join(directory, "rulesets", "m.yml")).read()
+    assert "# a ruleset written by hand" in text, text
+
+    fresh = Policy(directory).rulesets["m.yml"]
+    assert [r.match for r in fresh.rules] == [
+        "*.example.com", "b.example.com", "c.example.com"]
+    assert [r.path for r in fresh.rules] == ["/api/*", None, "/flow/*"]
+    assert fresh.rules[0].note == "first"
+
+    # An emptied path goes back to matching the whole host, rather than
+    # matching on an empty string, in either style.
+    p.set_rule_field("m.yml", 0, "path", "")      # block style
+    p.set_rule_field("m.yml", 2, "path", "")      # flow style
+    assert [r.path for r in Policy(directory).rulesets["m.yml"].rules] == [None] * 3
+    assert Policy(directory).rulesets["m.yml"].rules[2].match == "c.example.com"
+    assert Policy(directory).decide("www.example.com", "/anything")[0] == "allow"
+
+    # A rule with nothing to match is refused, as is a field that is not one.
+    for key, bad in (("match", ""), ("match", "   "), ("nonsense", "x")):
+        try:
+            p.set_rule_field("m.yml", 0, key, bad)
+            assert False, f"accepted {key}={bad!r}"
+        except ValueError:
             pass
 
 
@@ -464,7 +498,7 @@ def test_a_long_rule_stays_on_one_line():
     # ...so toggling and retitling it still edit lines rather than falling back
     # to the rewrite that would drop the comments.
     p.set_rules_enabled("m.yml", [3], False)
-    p.set_rule_note("m.yml", 3, "off for now")
+    p.set_rule_field("m.yml", 3, "note", "off for now")
     text = open(os.path.join(directory, "rulesets", "m.yml")).read()
     assert "# a ruleset written by hand" in text, text
 
