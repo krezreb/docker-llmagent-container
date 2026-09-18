@@ -139,12 +139,50 @@ class Rulesets(Base):
             }
         )
 
+    def post(self):
+        try:
+            filename = self.ctx.policy.create_ruleset(self.body().get("name"))
+        except ValueError as exc:
+            raise tornado.web.HTTPError(400, reason=str(exc))
+        self.ctx.log.event("state", {"ruleset": filename})
+        self.write({"file": filename})
+
     def put(self, filename):
         if filename not in self.ctx.policy.rulesets:
             raise tornado.web.HTTPError(404, reason="no such ruleset")
-        self.ctx.policy.set_enabled(filename, bool(self.body().get("enabled")))
+        body = self.body()
+        try:
+            if "name" in body:
+                self.ctx.policy.set_name(filename, body["name"])
+        except ValueError as exc:
+            raise tornado.web.HTTPError(400, reason=str(exc))
+        if "enabled" in body:
+            self.ctx.policy.set_enabled(filename, bool(body["enabled"]))
+        if "description" in body:
+            self.ctx.policy.set_description(filename, body["description"])
         self.ctx.log.event("state", {"ruleset": filename})
         self.write({"ok": True})
+
+
+class Rules(Base):
+    """Enable or disable rules of one ruleset, a whole drag at a time."""
+
+    def put(self, filename):
+        if filename not in self.ctx.policy.rulesets:
+            raise tornado.web.HTTPError(404, reason="no such ruleset")
+        body = self.body()
+        try:
+            indexes = [int(i) for i in body.get("indexes") or []]
+        except (TypeError, ValueError):
+            raise tornado.web.HTTPError(400, reason="indexes must be whole numbers")
+        if not indexes:
+            raise tornado.web.HTTPError(400, reason="no rules named")
+        try:
+            self.ctx.policy.set_rules_enabled(filename, indexes, bool(body.get("enabled")))
+        except IndexError as exc:
+            raise tornado.web.HTTPError(404, reason=str(exc))
+        self.ctx.log.event("state", {"ruleset": filename})
+        self.write({"ok": True, "rules": len(indexes)})
 
 
 class Pending(Base):
@@ -160,8 +198,10 @@ class Pending(Base):
             resolved = self.ctx.policy.pending.resolve(
                 key, decision, body.get("save_to"), body.get("scope", "host")
             )
-        except KeyError:
-            raise tornado.web.HTTPError(404, reason="no such pending entry")
+        except KeyError as exc:
+            raise tornado.web.HTTPError(
+                404, reason=f"no such pending entry or ruleset: {exc.args[0]}"
+            )
         self.write({"resolved": resolved})
 
 
@@ -212,7 +252,11 @@ class Index(tornado.web.RequestHandler):
             "dev-agent proxy — no web UI in this image.\n\n"
             "  GET  /api/policy\n"
             "  GET  /api/mode          PUT {\"mode\": \"default-deny\"}\n"
-            "  GET  /api/rulesets      PUT /api/rulesets/<file> {\"enabled\": true}\n"
+            "  GET  /api/rulesets      POST {\"name\": \"...\"}\n"
+            "  GET  /api/rulesets/<file>\n"
+            "                          PUT {\"name\": \"...\", \"enabled\": true,\n"
+            "                               \"description\": \"...\"}\n"
+            "  PUT  /api/rulesets/<file>/rules {\"indexes\": [0, 2], \"enabled\": false}\n"
             "  GET  /api/pending       POST /api/pending/<key> {\"decision\": \"allow\"}\n"
             "  GET  /api/log           GET /api/events (SSE)\n"
         )
@@ -227,6 +271,7 @@ def serve(ctx) -> None:
             (r"/api/mode", Mode, args),
             (r"/api/rulesets", Rulesets, args),
             (r"/api/rulesets/([^/]+)", Rulesets, args),
+            (r"/api/rulesets/([^/]+)/rules", Rules, args),
             (r"/api/pending", Pending, args),
             (r"/api/pending/([^/]+)", Pending, args),
             (r"/api/log", LogTail, args),

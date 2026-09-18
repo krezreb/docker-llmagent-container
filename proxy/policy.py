@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 import time
 from dataclasses import dataclass, field
 
@@ -43,6 +44,7 @@ class Rule:
     action: str
     path: str | None = None
     note: str = ""
+    enabled: bool = True
 
     def matches(self, host: str, path: str | None) -> bool:
         if not match_host(self.match, host):
@@ -119,6 +121,7 @@ class Policy:
                         action=r.get("action", "deny"),
                         path=r.get("path"),
                         note=r.get("note", ""),
+                        enabled=bool(r.get("enabled", True)),
                     )
                     for r in doc.get("rules") or []
                     if r.get("match")
@@ -162,10 +165,7 @@ class Policy:
         self._write_settings()
 
     def _write_settings(self) -> None:
-        tmp = self.settings_path + ".tmp"
-        with open(tmp, "w") as fh:
-            json.dump(self.settings, fh, indent=2)
-        os.replace(tmp, self.settings_path)
+        _atomic_write(self.settings_path, json.dumps(self.settings, indent=2))
         self._mtimes = self._stamp()
 
     def set_enabled(self, filename: str, enabled: bool) -> None:
@@ -173,21 +173,108 @@ class Policy:
         # be hand-edited and kept in git, and safe_dump would silently drop
         # every comment in one the moment somebody flicked a toggle.
         ruleset = self.rulesets[filename]
-        path = os.path.join(self.rulesets_dir, filename)
-        text = open(path).read()
-        value = "true" if enabled else "false"
-        edited, count = re.subn(
-            r"^enabled:.*$", f"enabled: {value}", text, count=1, flags=re.MULTILINE
-        )
-        if count == 0:
-            edited = f"enabled: {value}\n{text}"
-
-        if not _write_checked(path, edited, lambda doc: bool(doc.get("enabled", True)) is bool(enabled)):
-            doc = yaml.safe_load(text) or {}
-            doc["enabled"] = enabled
-            _write_yaml(path, doc)
+        self._set_key(filename, "enabled", "true" if enabled else "false",
+                      lambda doc: bool(doc.get("enabled", True)) is bool(enabled))
         ruleset.enabled = enabled
         self._mtimes = self._stamp()
+
+    def set_name(self, filename: str, name: str) -> None:
+        """Rename the ruleset, not the file.
+
+        The filename is what a saved rule, an error message and the UI's
+        picker all refer to, so it stays put; `name` is only what the operator
+        calls it.
+        """
+        ruleset = self.rulesets[filename]
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("a ruleset needs a name")
+        self._set_key(filename, "name", yaml.safe_dump(name, default_style='"').strip().rstrip("."),
+                      lambda doc: (doc.get("name") or "") == name)
+        ruleset.name = name
+        self._mtimes = self._stamp()
+
+    def set_description(self, filename: str, description: str) -> None:
+        ruleset = self.rulesets[filename]
+        description = (description or "").strip()
+        self._set_key(filename, "description",
+                      yaml.safe_dump(description, default_style='"').strip().rstrip("."),
+                      lambda doc: (doc.get("description") or "") == description)
+        ruleset.description = description
+        self._mtimes = self._stamp()
+
+    def _set_key(self, filename: str, key: str, raw: str, ok) -> None:
+        """Replace one top-level scalar, or add it, without touching the rest."""
+        path = os.path.join(self.rulesets_dir, filename)
+        text = open(path).read()
+        edited, count = re.subn(
+            rf"^{key}:.*$", f"{key}: {raw}", text, count=1, flags=re.MULTILINE
+        )
+        if count == 0:
+            edited = f"{key}: {raw}\n{text}"
+
+        if not _write_checked(path, edited, ok):
+            doc = yaml.safe_load(text) or {}
+            doc[key] = yaml.safe_load(raw)
+            _write_yaml(path, doc)
+
+    def set_rules_enabled(self, filename: str, indexes: list[int], enabled: bool) -> None:
+        """Flip `enabled` on some rules of one ruleset, comments intact.
+
+        One call for a whole drag: the UI paints across a run of rules and
+        commits once, so the file is written once and reloaded once.
+        """
+        path = os.path.join(self.rulesets_dir, filename)
+        text = open(path).read()
+        lines = text.split("\n")
+        spans = _rule_spans(lines)
+
+        indexes = sorted(set(indexes))
+        if not indexes or indexes[-1] >= len(spans):
+            raise IndexError(f"{filename} has {len(spans)} rules")
+
+        # From the bottom, so an insertion never moves a span still to come.
+        for index in reversed(indexes):
+            _set_item_enabled(lines, *spans[index], enabled)
+
+        def ok(doc):
+            rules = doc.get("rules") or []
+            return all(bool(rules[i].get("enabled", True)) is bool(enabled) for i in indexes)
+
+        if not _write_checked(path, "\n".join(lines), ok):
+            doc = yaml.safe_load(text) or {}
+            for index in indexes:
+                doc["rules"][index]["enabled"] = enabled
+            _write_yaml(path, doc)
+        self.reload(force=True)
+
+    def create_ruleset(self, name: str) -> str:
+        """A new, empty, enabled ruleset. Returns the filename it was given.
+
+        The filename comes from a slug of the name and never from the input
+        directly: this is the one place the operator's text would otherwise
+        reach a path.
+        """
+        name = (name or "").strip()
+        slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+        if not slug:
+            raise ValueError("a ruleset needs a name with a letter or digit in it")
+
+        filename = f"{slug}.yml"
+        path = os.path.join(self.rulesets_dir, filename)
+        if os.path.exists(path):
+            raise ValueError(f"{filename} already exists")
+
+        # `rules:` bare rather than `rules: []`, so that the first saved rule
+        # can be appended as a line instead of forcing a rewrite.
+        header = yaml.safe_dump(
+            {"name": name, "description": "created from the UI", "enabled": True},
+            sort_keys=False, default_flow_style=False,
+        )
+        with open(path, "w") as fh:
+            fh.write(header + "rules:\n")
+        self.reload(force=True)
+        return filename
 
     def append_rule(self, filename: str, rule: Rule) -> None:
         path = os.path.join(self.rulesets_dir, filename)
@@ -197,7 +284,11 @@ class Policy:
         if rule.note:
             entry["note"] = rule.note
 
-        text = open(path).read() if os.path.exists(path) else "rules:\n"
+        if not os.path.exists(path):
+            # Rulesets are made by create_ruleset, which names and describes
+            # them. Conjuring one here would leave a file with no name in it.
+            raise KeyError(filename)
+        text = open(path).read()
         doc = yaml.safe_load(text) or {}
         before = len(doc.get("rules") or [])
 
@@ -240,6 +331,8 @@ class Policy:
                 if not ruleset.enabled:
                     continue
                 for rule in ruleset.rules:
+                    if not rule.enabled:
+                        continue
                     if rule.action == action and rule.matches(host, path):
                         return action, f"{filename}:{rule.note or rule.match}"
 
@@ -255,7 +348,7 @@ class Policy:
             if not ruleset.enabled:
                 continue
             for rule in ruleset.rules:
-                if rule.action in effective:
+                if rule.enabled and rule.action in effective:
                     effective[rule.action].append(
                         {"match": rule.match, "path": rule.path, "note": rule.note,
                          "ruleset": filename}
@@ -366,6 +459,50 @@ class PendingQueue:
         return [e.as_json() for e in self.entries.values()]
 
 
+def _rule_spans(lines: list[str]) -> list[tuple[int, int]]:
+    """The first and last line of each item under `rules:`.
+
+    Line arithmetic rather than a YAML round trip, because these files carry
+    the user's comments and safe_dump would drop every one of them.
+    """
+    spans: list[list[int]] = []
+    inside = False
+    for number, line in enumerate(lines):
+        if re.match(r"^rules:", line):
+            inside = True
+            continue
+        if not inside:
+            continue
+        if re.match(r"^\s*-\s", line):
+            spans.append([number, number])
+        elif line.strip() and not line[:1].isspace():
+            break  # the next top-level key ends the list
+        elif spans:
+            spans[-1][1] = number
+    return [(start, end) for start, end in spans]
+
+
+def _set_item_enabled(lines: list[str], start: int, end: int, enabled: bool) -> None:
+    value = "true" if enabled else "false"
+
+    flow = re.match(r"^(\s*)-\s*\{(.*)\}\s*$", lines[start])
+    if flow:
+        indent, inner = flow.groups()
+        inner = re.sub(r",?\s*enabled:\s*\S+", "", inner).strip().rstrip(",")
+        lines[start] = f"{indent}- {{{inner}, enabled: {value}}}"
+        return
+
+    for number in range(start, end + 1):
+        if re.match(r"^\s*(-\s+)?enabled:", lines[number]):
+            lines[number] = re.sub(r"enabled:.*", f"enabled: {value}", lines[number])
+            return
+
+    content = [n for n in range(start, end + 1)
+               if lines[n].strip() and not lines[n].lstrip().startswith("#")]
+    indent = re.match(r"^(\s*)", lines[start]).group(1) + "  "
+    lines.insert(content[-1] + 1, f"{indent}enabled: {value}")
+
+
 def _write_checked(path: str, text: str, ok) -> bool:
     """Write only if the result parses and says what it was meant to say."""
     try:
@@ -374,18 +511,30 @@ def _write_checked(path: str, text: str, ok) -> bool:
         return False
     if not ok(doc):
         return False
-    tmp = path + ".tmp"
-    with open(tmp, "w") as fh:
-        fh.write(text)
-    os.replace(tmp, path)
+    _atomic_write(path, text)
     return True
 
 
 def _write_yaml(path: str, doc: dict) -> None:
-    tmp = path + ".tmp"
-    with open(tmp, "w") as fh:
-        yaml.safe_dump(doc, fh, sort_keys=False, default_flow_style=False)
-    os.replace(tmp, path)
+    _atomic_write(path, yaml.safe_dump(doc, sort_keys=False, default_flow_style=False))
+
+
+def _atomic_write(path: str, text: str) -> None:
+    """Replace a file's contents in one step, through a temporary of its own.
+
+    A fixed `path + ".tmp"` would be shared by two writers, and two writes that
+    overlapped would interleave into one file rather than one winning; the
+    mode is set because these are read by an arbitrary host uid.
+    """
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".write-")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        os.unlink(tmp)
+        raise
 
 
 def print_stderr(message: str) -> None:

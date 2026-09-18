@@ -3,7 +3,7 @@
 # Edited by hand or from the UI; the proxy re-reads it when its mtime moves,
 # so neither a restart nor a rebuild is needed. It is copied in only when
 # /state/rulesets is empty, so your edits are never overwritten.
-name: default
+name: Default
 description: Everything a normal development container needs
 enabled: true
 rules:

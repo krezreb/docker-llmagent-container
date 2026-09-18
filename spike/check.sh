@@ -4,12 +4,17 @@
 # be checked without writing the proxy first.
 #
 #   1. a container on an internal network cannot reach the internet
-#   2. it can reach the internet through a proxy on that network
+#   2. it can reach the internet through a proxy on that network, both for
+#      ordinary tooling and for 'claude' and 'codex' themselves
 #   2b. TLS interception works with the CA wired the way SPEC.md section 7 says,
 #       on a read-only root filesystem
 #   4. reverse DNS on the docker network yields the client container's name
 #
 # Assumption 3 (holding a flow) needs the addon and is not covered here.
+#
+# The agent checks need an agent that is already logged in, per SPEC.md section
+# 7.1; they report SKIP, not FAIL, when it is not, since that is a fact about
+# this host and not about interception.
 #
 # Run on the host, with docker. Cleans up after itself.
 #
@@ -20,20 +25,31 @@ MITM_IMAGE="${MITM_IMAGE:-mitmproxy/mitmproxy:latest}"
 NET_AGENTS=spike-agents
 NET_EGRESS=spike-egress
 PROXY=spike-proxy
+CLIENT=spike-client
+
+# Two directories, as SPEC.md section 5.2 has them: CONF_DIR is mitmproxy's
+# confdir and holds the CA private key, CA_DIR is what gets mounted into the
+# container and holds only the certificate and the bundle. Mounting the confdir
+# would hand the agent the CA key.
+CONF_DIR="$(mktemp -d)"
 CA_DIR="$(mktemp -d)"
+
+AGENT_HOME="${DEV_AGENT_HOME:-$HOME/.local/share/dev-agent/home}"
 
 pass=0
 fail=0
+skipped=0
 
 ok()   { printf '  \033[32mPASS\033[0m  %s\n' "$1"; pass=$((pass + 1)); }
 bad()  { printf '  \033[31mFAIL\033[0m  %s\n' "$1"; fail=$((fail + 1)); }
+skip() { printf '  \033[33mSKIP\033[0m  %s\n' "$1"; skipped=$((skipped + 1)); }
 note() { printf '  ....  %s\n' "$1"; }
 head_() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 cleanup() {
-    docker rm -f "$PROXY" >/dev/null 2>&1 || true
+    docker rm -f "$PROXY" "$CLIENT" >/dev/null 2>&1 || true
     docker network rm "$NET_AGENTS" "$NET_EGRESS" >/dev/null 2>&1 || true
-    rm -rf "$CA_DIR"
+    rm -rf "$CONF_DIR" "$CA_DIR"
 }
 trap cleanup EXIT
 
@@ -68,24 +84,30 @@ note "networks created ($NET_AGENTS is internal)"
 # mitmdump with interception on, CA written where we can read it out.
 docker run -d --name "$PROXY" \
     --network "$NET_EGRESS" \
-    -v "$CA_DIR:/home/mitmproxy/.mitmproxy" \
+    -v "$CONF_DIR:/home/mitmproxy/.mitmproxy" \
     "$MITM_IMAGE" \
     mitmdump --listen-port 3128 --set confdir=/home/mitmproxy/.mitmproxy >/dev/null
 docker network connect "$NET_AGENTS" "$PROXY"
 
 for _ in $(seq 30); do
-    [[ -f "$CA_DIR/mitmproxy-ca-cert.pem" ]] && break
+    [[ -f "$CONF_DIR/mitmproxy-ca-cert.pem" ]] && break
     sleep 1
 done
-[[ -f "$CA_DIR/mitmproxy-ca-cert.pem" ]] ||
+[[ -f "$CONF_DIR/mitmproxy-ca-cert.pem" ]] ||
     { echo "proxy never produced a CA cert" >&2; docker logs "$PROXY" >&2; exit 1; }
 note "proxy up, CA generated"
 
-# The bundle of SPEC.md section 7: system trust store plus the interception CA.
-docker run --rm -v "$CA_DIR:/ca" "$IMAGE" \
-    bash -c 'cat /etc/ssl/certs/ca-certificates.crt /ca/mitmproxy-ca-cert.pem' \
+# The certificate, alone, without the key file that sits beside it in the confdir.
+cp "$CONF_DIR/mitmproxy-ca-cert.pem" "$CA_DIR/ca.crt"
+
+# The bundle of SPEC.md section 5.2: the trust store of the *agent* image, not
+# the proxy image's, with the interception CA appended.
+docker run --rm -v "$CA_DIR:/ca:ro" "$IMAGE" \
+    bash -c 'cat /etc/ssl/certs/ca-certificates.crt /ca/ca.crt' \
     > "$CA_DIR/bundle.crt"
-chmod a+r "$CA_DIR"/*.pem "$CA_DIR/bundle.crt"
+
+chmod 0755 "$CA_DIR"
+chmod 0644 "$CA_DIR/ca.crt" "$CA_DIR/bundle.crt"
 
 PROXY_ENV=(
     --env "HTTP_PROXY=http://$PROXY:3128"
@@ -97,7 +119,16 @@ PROXY_ENV=(
     --env CURL_CA_BUNDLE=/etc/dev-agent-ca/bundle.crt
     --env GIT_SSL_CAINFO=/etc/dev-agent-ca/bundle.crt
     --env REQUESTS_CA_BUNDLE=/etc/dev-agent-ca/bundle.crt
-    --env NODE_EXTRA_CA_CERTS=/etc/dev-agent-ca/mitmproxy-ca-cert.pem
+    --env NODE_EXTRA_CA_CERTS=/etc/dev-agent-ca/ca.crt
+    --env NODE_OPTIONS=--use-env-proxy
+)
+
+# SPEC.md section 7 step 7: a --proxy session mounts the persistent agent home,
+# which is where the logins from 7.1 live.
+AGENT_HOME_ENV=(
+    --mount "type=bind,src=$AGENT_HOME,dst=/home/agent"
+    --env HOME=/home/agent
+    --user "$(id -u):$(id -g)"
 )
 
 head_ "assumption 1 — isolation isolates"
@@ -137,11 +168,24 @@ else
     bad "python3 rejected the intercepted certificate"
 fi
 
-if in_agent "${PROXY_ENV[@]}" -- \
-    'node -e "fetch(\"https://example.com\").then(r=>process.exit(r.ok?0:1)).catch(e=>{console.error(e.message);process.exit(1)})"'; then
-    ok "node fetch trusts NODE_EXTRA_CA_CERTS"
+node_fetch='node -e "fetch(\"https://example.com\").then(r=>process.exit(r.ok?0:1)).catch(e=>{console.error(e.message);process.exit(1)})"'
+
+if in_agent "${PROXY_ENV[@]}" -- "$node_fetch"; then
+    ok "node fetch goes through the proxy and trusts NODE_EXTRA_CA_CERTS"
 else
-    bad "node rejected the intercepted certificate"
+    bad "node fetch failed through the proxy"
+fi
+
+# Node reads neither HTTP_PROXY nor HTTPS_PROXY on its own: undici's fetch and
+# the core http/https modules both connect directly, which on this network
+# means 'getaddrinfo EAI_AGAIN'. NODE_OPTIONS=--use-env-proxy is what fixes it,
+# and it needs Node 24 or newer. This check is here so that if that variable
+# ever falls out of PROXY_ENV or out of SPEC.md section 7, something says so
+# rather than every node fetch silently failing in front of a user.
+if in_agent "${PROXY_ENV[@]}" --env NODE_OPTIONS= -- "$node_fetch" 2>/dev/null; then
+    bad "node reached the proxy without --use-env-proxy; the variable may now be unnecessary"
+else
+    ok "node needs NODE_OPTIONS=--use-env-proxy, as section 7 sets it"
 fi
 
 if in_agent "${PROXY_ENV[@]}" -- \
@@ -149,6 +193,54 @@ if in_agent "${PROXY_ENV[@]}" -- \
     ok "git clone over https through the proxy"
 else
     bad "git clone over https failed"
+fi
+
+head_ "assumption 2 — the agents themselves survive interception"
+
+# The assumption that actually matters. curl, python3, node and git read
+# SSL_CERT_FILE and were never in doubt; whether an agent's own bundled HTTP
+# stack tolerates interception while streaming a long response is the unknown,
+# and it is the one whose failure would kill the feature.
+#
+# 'claude -p' and 'codex exec' are the non-interactive modes: one turn, print
+# the answer, exit. A real API call, so a real intercepted TLS session.
+
+agent_turn() {
+    local name="$1" marker="$2" cmd="$3" out=""
+
+    if ! out="$(in_agent "${PROXY_ENV[@]}" "${AGENT_HOME_ENV[@]}" -- \
+                    "timeout 120 $cmd" 2>&1)"; then
+        bad "$name did not complete a turn through the proxy: $(
+                printf '%s' "$out" | tr -d '\r' | grep -v '^$' | tail -1)"
+        return
+    fi
+
+    if printf '%s' "$out" | grep -qi "$marker"; then
+        ok "$name completed a turn through the intercepting proxy"
+    else
+        bad "$name exited 0 but never said '$marker'; got: $(
+                printf '%s' "$out" | tr -d '\r' | grep -v '^$' | tail -1)"
+    fi
+}
+
+if [[ ! -d "$AGENT_HOME" ]]; then
+    skip "no agent home at $AGENT_HOME; log in first (SPEC.md 7.1)"
+else
+    if [[ -f "$AGENT_HOME/.claude.json" || -d "$AGENT_HOME/.claude" ]]; then
+        agent_turn claude spike-ok \
+            'claude -p "Reply with exactly the word spike-ok and nothing else."'
+    else
+        skip "claude is not logged in; run 'dev-agent --host-network claude' first"
+    fi
+
+    if [[ -f "$AGENT_HOME/.codex/auth.json" ]]; then
+        # --skip-git-repo-check because the throwaway container has no repo in
+        # its working directory; a real --proxy session is always in a project.
+        agent_turn codex spike-ok \
+            'codex exec --skip-git-repo-check "Reply with exactly the word spike-ok and nothing else."'
+    else
+        skip "codex is not logged in; run 'dev-agent --host-network codex' first"
+    fi
 fi
 
 head_ "assumption 2b — the proxy is the only way out"
@@ -163,15 +255,15 @@ fi
 
 head_ "assumption 4 — reverse DNS names the client"
 
-client_ip="$(docker run -d --rm --name spike-client --network "$NET_AGENTS" \
+client_ip="$(docker run -d --rm --name "$CLIENT" --network "$NET_AGENTS" \
     "$IMAGE" sleep 20 >/dev/null && \
-    docker inspect -f "{{.NetworkSettings.Networks.${NET_AGENTS}.IPAddress}}" spike-client)"
+    docker inspect -f "{{(index .NetworkSettings.Networks \"${NET_AGENTS}\").IPAddress}}" "$CLIENT")"
 
 resolved="$(docker exec "$PROXY" python3 -c \
     "import socket;print(socket.gethostbyaddr('$client_ip')[0])" 2>/dev/null || true)"
-docker rm -f spike-client >/dev/null 2>&1 || true
+docker rm -f "$CLIENT" >/dev/null 2>&1 || true
 
-if [[ "$resolved" == *spike-client* ]]; then
+if [[ "$resolved" == *"$CLIENT"* ]]; then
     ok "reverse DNS gives the container name ($resolved)"
 else
     bad "reverse DNS gave '${resolved:-nothing}' for $client_ip; log the IP instead"
@@ -186,5 +278,11 @@ else
 fi
 
 head_ "result"
-printf '  %d passed, %d failed\n\n' "$pass" "$fail"
+printf '  %d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skipped"
+
+if [[ $skipped -gt 0 ]]; then
+    printf '  a skipped agent check is an unvalidated assumption, not a pass\n'
+fi
+
+printf '\n'
 [[ $fail -eq 0 ]]

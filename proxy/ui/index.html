@@ -83,6 +83,11 @@
   .pill:hover { background: var(--panel); color: var(--fg); }
   .pill.on { background: var(--accent); color: #fff; }
   .rules { margin: .4rem 0 0; }
+  .plain { border: 0; background: transparent; padding: .1rem .3rem .1rem 0;
+           font: inherit; color: inherit; }
+  .plain:hover { color: var(--accent); }
+  tr.rule { cursor: pointer; user-select: none; }
+  tr.rule.off td:not(:first-child) { opacity: .45; text-decoration: line-through; }
   .save { display: inline-flex; gap: .4rem; align-items: center; padding: .2rem .5rem;
           border: 1px dashed var(--line); border-radius: 6px; }
 </style>
@@ -135,7 +140,7 @@
               </select>
               <span class="dim">in</span>
               <select v-model="p.saveTo">
-                <option v-for="r in rulesets" :key="r.file" :value="r.file">{{ r.file }}</option>
+                <option v-for="r in rulesets" :key="r.file" :value="r.file">{{ r.name }}</option>
               </select>
             </span>
           </td>
@@ -195,14 +200,39 @@
             <input type="checkbox" :checked="r.enabled" @change="toggle(r, $event)">
           </td>
           <td>
-            <span class="mono">{{ r.file }}</span>
-            <span class="dim"> — {{ r.description || r.name }}</span>
-            <button style="margin-left:.5rem" @click="expand(r)">
-              {{ r.rules }} rules {{ r.open ? '▾' : '▸' }}
-            </button>
+            <!-- The filename only shows on hover: the name is what the operator
+                 named it, and the file is what they would go and edit. -->
+            <!-- Rename opens both texts at once; nothing saves until save is
+                 pressed, so tabbing between the two fields is not a commit.
+                 Outside that, a click anywhere on the row's text expands it. -->
+            <template v-if="r.renaming">
+              <input v-focus v-model="r.name" size="18" @keyup.enter="saveRuleset(r)">
+              <input v-model="r.description" size="44" @keyup.enter="saveRuleset(r)">
+              <button class="primary" @click="saveRuleset(r)">save</button>
+              <button @click="cancelRename(r)">cancel</button>
+            </template>
+            <template v-else>
+              <button class="plain" :title="r.file" @click="expand(r)">
+                <strong>{{ r.name }}</strong>
+                <span class="dim">({{ r.rules }})</span>
+                <span class="dim">{{ r.open ? '▾' : '▸' }}</span>
+              </button>
+              <button class="plain dim" @click="expand(r)">
+                {{ r.description || 'no description' }}
+              </button>
+              <button @click="startRename(r)">rename</button>
+            </template>
             <table v-if="r.open" class="rules">
               <tbody>
-              <tr v-for="(rule, i) in r.detail" :key="i">
+              <!-- Press on a rule and drag across the others to paint them all
+                   to the state the first one flipped to. -->
+              <tr v-for="(rule, i) in r.detail" :key="i" class="rule"
+                  :class="{off: !rule.enabled}"
+                  @mousedown.prevent="paintStart(r, i)" @mouseenter="paintOver(r, i)">
+                <td style="width:1%">
+                  <input type="checkbox" :checked="rule.enabled"
+                         @mousedown.stop @change="toggleRule(r, i, $event)">
+                </td>
                 <td :class="rule.action" style="width:1%">{{ rule.action }}</td>
                 <td class="mono">{{ rule.match }}<span v-if="rule.path">{{ rule.path }}</span></td>
                 <td class="dim">{{ rule.note }}</td>
@@ -213,6 +243,12 @@
         </tr>
         </tbody>
       </table>
+      <div class="row" style="margin-top:.6rem">
+        <input v-model="newRuleset" placeholder="name a new ruleset"
+               @keyup.enter="create">
+        <button @click="create" :disabled="!newRuleset.trim()">New ruleset</button>
+        <span class="deny" v-if="error">{{ error }}</span>
+      </div>
     </section>
   </main>
 </div>
@@ -231,7 +267,7 @@ const put = (path, body) => api(path, {
   method: 'PUT', headers: {'content-type': 'application/json'}, body: JSON.stringify(body),
 });
 
-Vue.createApp({
+const app = Vue.createApp({
   data: () => ({
     // The labels are the UI's; the values are the API's, and they differ only
     // in case and spacing.
@@ -242,7 +278,8 @@ Vue.createApp({
       {value: 'log-only', label: 'Log-only'},
     ],
     mode: '', rulesets: [], pending: [], log: [], open: null, connected: false,
-    fetchedAt: Date.now(), now: Date.now(),
+    fetchedAt: Date.now(), now: Date.now(), newRuleset: '', error: '',
+    paint: null,
     filter: {host: '', cat: '', decision: ''},
   }),
 
@@ -260,6 +297,9 @@ Vue.createApp({
   async mounted() {
     await Promise.all([this.loadPolicy(), this.loadLog(), this.loadPending()]);
     this.stream();
+    // A drag ends wherever the button comes up, which is often outside the row
+    // it started in and sometimes outside the table.
+    window.addEventListener('mouseup', () => this.paintEnd());
     // Only the displayed age ticks; the entries themselves arrive over SSE.
     setInterval(() => { this.now = Date.now(); }, 1000);
   },
@@ -269,7 +309,7 @@ Vue.createApp({
       const policy = await api('/api/policy');
       this.mode = policy.mode;
       this.rulesets = policy.rulesets.map(r =>
-        Object.assign({open: false, detail: []}, r));
+        Object.assign({open: false, renaming: false, was: null, detail: []}, r));
     },
     async loadLog() { this.log = (await api('/api/log')).log; },
     async loadPending() {
@@ -306,6 +346,71 @@ Vue.createApp({
       await put('/api/mode', {mode});
       this.mode = mode;
     },
+    async create() {
+      this.error = '';
+      try {
+        await api('/api/rulesets', {
+          method: 'POST', headers: {'content-type': 'application/json'},
+          body: JSON.stringify({name: this.newRuleset}),
+        });
+        this.newRuleset = '';
+        await this.loadPolicy();
+      } catch (e) {
+        this.error = e.message;  // the name was taken, or had nothing to slug
+      }
+    },
+    paintStart(ruleset, index) {
+      this.paint = {
+        file: ruleset.file,
+        enabled: !ruleset.detail[index].enabled,
+        indexes: new Set(),
+      };
+      this.paintOver(ruleset, index);
+    },
+    paintOver(ruleset, index) {
+      if (!this.paint || this.paint.file !== ruleset.file) return;
+      ruleset.detail[index].enabled = this.paint.enabled;
+      this.paint.indexes.add(index);
+    },
+    paintEnd() {
+      const paint = this.paint;
+      this.paint = null;
+      if (paint && paint.indexes.size) {
+        this.saveRules(paint.file, [...paint.indexes], paint.enabled);
+      }
+    },
+    toggleRule(ruleset, index, event) {
+      ruleset.detail[index].enabled = event.target.checked;
+      this.saveRules(ruleset.file, [index], event.target.checked);
+    },
+    async saveRules(file, indexes, enabled) {
+      this.error = '';
+      try {
+        await put('/api/rulesets/' + file + '/rules', {indexes, enabled});
+      } catch (e) {
+        this.error = e.message;
+        await this.loadPolicy();  // the file won, whatever it says
+      }
+    },
+    startRename(ruleset) {
+      ruleset.was = {name: ruleset.name, description: ruleset.description};
+      ruleset.renaming = true;
+    },
+    cancelRename(ruleset) {
+      Object.assign(ruleset, ruleset.was, {renaming: false, was: null});
+    },
+    async saveRuleset(ruleset) {
+      if (!ruleset.renaming) return;
+      ruleset.renaming = false;
+      this.error = '';
+      try {
+        await put('/api/rulesets/' + ruleset.file,
+                  {name: ruleset.name, description: ruleset.description});
+      } catch (e) {
+        this.error = e.message;
+        await this.loadPolicy();  // an empty name was refused; show what stuck
+      }
+    },
     async toggle(ruleset, event) {
       await put('/api/rulesets/' + ruleset.file, {enabled: event.target.checked});
       ruleset.enabled = event.target.checked;
@@ -329,5 +434,8 @@ Vue.createApp({
       if (save) this.loadPolicy();  // the rule count on the pane below moved
     },
   },
-}).mount('#app');
+});
+
+app.directive('focus', {mounted: el => el.focus()});
+app.mount('#app');
 </script>

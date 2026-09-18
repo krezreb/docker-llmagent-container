@@ -222,6 +222,134 @@ def test_a_saved_rule_carries_the_decision_that_was_made():
     assert (action, rule) == ("deny", "r.yml:saved from the UI"), (action, rule)
 
 
+MIXED = """# a ruleset written by hand
+name: Mixed
+description: two styles in one file
+enabled: true
+rules:
+  # the block form, which is what the shipped defaults use
+  - match: a.example.com
+    action: allow
+    note: first
+  - match: b.example.com
+    action: deny
+    note: second
+  # the flow form, which is what a saved rule looks like
+  - {match: c.example.com, action: allow, note: third}
+"""
+
+
+def test_a_disabled_rule_is_inert():
+    p = Policy(state({"r.yml": """
+name: r
+rules:
+  - {match: evil.example.com, action: deny, note: off for now, enabled: false}
+  - {match: "*", action: allow, note: everything}
+"""}))
+    # The deny would win on order; disabled, it does not run at all.
+    assert p.decide("evil.example.com", "/")[0] == "allow"
+    assert p.snapshot()["effective"]["deny"] == []
+
+
+def test_toggling_rules_keeps_both_styles_and_the_comments():
+    directory = state({"m.yml": MIXED})
+    p = Policy(directory)
+    assert [r.enabled for r in p.rulesets["m.yml"].rules] == [True, True, True]
+
+    # A drag across the first and third: one call, one write.
+    p.set_rules_enabled("m.yml", [0, 2], False)
+
+    text = open(os.path.join(directory, "rulesets", "m.yml")).read()
+    assert "# a ruleset written by hand" in text, text
+    assert "# the flow form" in text, text
+
+    fresh = Policy(directory)
+    assert [r.enabled for r in fresh.rulesets["m.yml"].rules] == [False, True, False]
+    assert [r.match for r in fresh.rulesets["m.yml"].rules] == [
+        "a.example.com", "b.example.com", "c.example.com"]
+    assert fresh.decide("a.example.com", "/")[0] == "pending"
+    assert fresh.decide("b.example.com", "/")[0] == "deny"
+
+    # ...and back on again, without a second `enabled:` appearing anywhere.
+    fresh.set_rules_enabled("m.yml", [0, 1, 2], True)
+    text = open(os.path.join(directory, "rulesets", "m.yml")).read()
+    assert text.count("enabled: true") == 4, text  # the ruleset's, plus three rules
+    assert [r.enabled for r in Policy(directory).rulesets["m.yml"].rules] == [True] * 3
+
+
+def test_set_description():
+    directory = state({"m.yml": MIXED})
+    p = Policy(directory)
+    p.set_description("m.yml", "  what it is for now  ")
+    assert p.rulesets["m.yml"].description == "what it is for now"
+
+    text = open(os.path.join(directory, "rulesets", "m.yml")).read()
+    assert "# a ruleset written by hand" in text, text
+    assert Policy(directory).rulesets["m.yml"].description == "what it is for now"
+
+    # A description with YAML in it stays a description.
+    p.set_description("m.yml", "rules: everything, {and more}")
+    assert Policy(directory).rulesets["m.yml"].description == "rules: everything, {and more}"
+    assert len(Policy(directory).rulesets["m.yml"].rules) == 3
+
+
+def test_rename_keeps_the_file_and_the_comments():
+    directory = state({"m.yml": MIXED})
+    p = Policy(directory)
+    p.set_name("m.yml", "Corporate Hosts")
+
+    assert p.rulesets["m.yml"].name == "Corporate Hosts"
+    assert os.path.exists(os.path.join(directory, "rulesets", "m.yml"))  # file stays put
+
+    text = open(os.path.join(directory, "rulesets", "m.yml")).read()
+    assert "# a ruleset written by hand" in text, text
+
+    fresh = Policy(directory)
+    assert fresh.rulesets["m.yml"].name == "Corporate Hosts"
+    assert len(fresh.rulesets["m.yml"].rules) == 3
+
+    for bad in ("", "   ", None):
+        try:
+            p.set_name("m.yml", bad)
+            assert False, f"accepted {bad!r}"
+        except ValueError:
+            pass
+    assert Policy(directory).rulesets["m.yml"].name == "Corporate Hosts"
+
+
+def test_create_ruleset():
+    directory = state({"r.yml": DENY_ONE})
+    p = Policy(directory)
+
+    filename = p.create_ruleset("Corporate Hosts")
+    assert filename == "corporate-hosts.yml"
+    assert p.rulesets[filename].name == "Corporate Hosts"
+    assert p.rulesets[filename].enabled is True
+    assert p.rulesets[filename].rules == []
+
+    # The first rule appends as a line, so `rules:` has to start bare.
+    p.append_rule(filename, Rule(match="intranet.example.com", action="deny", note="ours"))
+    assert Policy(directory).decide("intranet.example.com", "/")[0] == "deny"
+
+    for bad in ("", "   ", "///", "!!!"):
+        try:
+            p.create_ruleset(bad)
+            assert False, f"accepted {bad!r}"
+        except ValueError:
+            pass
+
+    # A name that slugs onto an existing file is refused rather than merged.
+    try:
+        p.create_ruleset("corporate hosts")
+        assert False, "accepted a duplicate"
+    except ValueError:
+        pass
+
+    # The filename never comes from the input itself.
+    assert p.create_ruleset("../../etc/passwd") == "etc-passwd.yml"
+    assert os.path.exists(os.path.join(directory, "rulesets", "etc-passwd.yml"))
+
+
 def test_append_rule_keeps_the_file_loadable():
     directory = state({"r.yml": DENY_ONE})
     p = Policy(directory)
