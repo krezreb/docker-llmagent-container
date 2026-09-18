@@ -263,6 +263,11 @@ class Events(Base):
     async def get(self):
         self.set_header("Content-Type", "text/event-stream")
         self.set_header("Cache-Control", "no-cache")
+        # Tornado holds the headers back until something is written, and the
+        # first event can be 20s away — the tab would sit on 'connecting' that
+        # whole time. A comment line opens the stream now.
+        self.write(": open\n\n")
+        await self.flush()
         queue = self.ctx.log.subscribe()
         try:
             while True:
