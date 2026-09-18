@@ -189,11 +189,9 @@ class Rules(Base):
             raise tornado.web.HTTPError(404, reason="no such ruleset")
         body = self.body()
         try:
-            if "note" in body:
-                self.ctx.policy.set_rule_note(filename, int(body["index"]), body["note"])
-                touched = 1
-            elif "action" in body:
-                self.ctx.policy.set_rule_action(filename, int(body["index"]), body["action"])
+            field = next((k for k in ("action", "match", "path", "note") if k in body), None)
+            if field:
+                self.ctx.policy.set_rule_field(filename, int(body["index"]), field, body[field])
                 touched = 1
             else:
                 indexes = [int(i) for i in body.get("indexes") or []]
@@ -300,8 +298,8 @@ class Index(tornado.web.RequestHandler):
             "  POST /api/rulesets/<file>/rules {\"rules\": [{\"match\": \"...\",\n"
             "                               \"action\": \"allow\", \"note\": \"...\"}]}\n"
             "  PUT  /api/rulesets/<file>/rules {\"indexes\": [0, 2], \"enabled\": false}\n"
-            "                          or {\"index\": 0, \"note\": \"...\"}\n"
-            "                          or {\"index\": 0, \"action\": \"deny\"}\n"
+            "                          or {\"index\": 0, \"match\"|\"path\"|\n"
+            "                              \"action\"|\"note\": \"...\"}\n"
             "  GET  /api/pending       POST /api/pending/<key> {\"decision\": \"allow\"}\n"
             "  GET  /api/log           DELETE /api/log?seconds=3600\n"
             "  GET  /api/events (SSE)\n"

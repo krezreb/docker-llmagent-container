@@ -286,25 +286,26 @@ class Policy:
         self.reload(force=True)
         return filename
 
-    def set_rule_action(self, filename: str, index: int, action: str) -> None:
-        """Swap one rule between allow, deny and tunnel, in place."""
-        if action not in ("allow", "deny", "tunnel"):
-            raise ValueError(f"unknown action: {action}")
-        self._edit_rules(
-            filename, [index],
-            lambda lines, span: _set_item_key(lines, *span, "action", action),
-            lambda doc: doc["rules"][index].get("action") == action,
-            lambda doc: doc["rules"][index].update(action=action),
-        )
+    def set_rule_field(self, filename: str, index: int, key: str, value: str) -> None:
+        """Change one field of one rule, in place, comments and neighbours untouched."""
+        if key not in ("action", "match", "path", "note"):
+            raise ValueError(f"a rule has no {key}")
+        value = (value or "").strip()
+        if key == "action" and value not in ("allow", "deny", "tunnel"):
+            raise ValueError(f"unknown action: {value}")
+        if key == "match" and not value:
+            raise ValueError("a rule needs a host to match")
 
-    def set_rule_note(self, filename: str, index: int, note: str) -> None:
-        """Retitle one rule, in place, comments and neighbours untouched."""
-        note = (note or "").strip()
+        # The path is the one field a rule can do without, and an absent one is
+        # written as null rather than as an empty string it would then match on.
+        blank = None if key == "path" else ""
+        want = value or blank
+        raw = "null" if want is None else value if key == "action" else _scalar(value)
         self._edit_rules(
             filename, [index],
-            lambda lines, span: _set_item_key(lines, *span, "note", _scalar(note)),
-            lambda doc: (doc["rules"][index].get("note") or "") == note,
-            lambda doc: doc["rules"][index].update(note=note),
+            lambda lines, span: _set_item_key(lines, *span, key, raw),
+            lambda doc: (doc["rules"][index].get(key) or blank) == want,
+            lambda doc: doc["rules"][index].update({key: want}),
         )
 
     def append_rule(self, filename: str, rule: Rule) -> None:

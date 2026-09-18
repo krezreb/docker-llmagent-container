@@ -88,10 +88,20 @@
   .plain { border: 0; background: transparent; padding: .1rem .3rem .1rem 0;
            font: inherit; color: inherit; }
   .plain:hover { color: var(--accent); }
-  tr.rule { user-select: none; }
-  td.grab { cursor: pointer; }
-  td.swap { cursor: ew-resize; }
+  /* Only the gutter is dragged, so only the gutter refuses to be selected;
+     the cells beside it are inputs, whose text has to stay selectable. */
+  td.grab { cursor: grab; user-select: none; }
+  td.swap { cursor: pointer; }
   tr.rule.off td:not(:first-child) { opacity: .45; text-decoration: line-through; }
+  /* An input does not inherit the row's line-through, so it is struck here. */
+  tr.rule.off .cell { text-decoration: line-through; }
+  /* A field that is always an input and only looks like one under the caret:
+     no edit mode to enter, and nothing to open or dismiss. */
+  .cell { width: 100%; border: 0; background: transparent; padding: .1rem .3rem;
+          font: inherit; color: inherit; border-radius: 3px; }
+  .cell:hover { background: var(--panel); }
+  .cell:focus { background: var(--bg); outline: 1px solid var(--accent); }
+  .cell::placeholder { color: var(--dim); opacity: .7; }
   .save { display: inline-flex; gap: .4rem; align-items: center; padding: .2rem .5rem;
           border: 1px dashed var(--line); border-radius: 6px; }
 </style>
@@ -239,52 +249,54 @@
             <table v-if="r.open" class="rules">
               <tbody>
               <tr>
-                <th style="width:1%">on</th>
+                <th style="width:1.6rem">on</th>
                 <th style="width:1%">action</th>
                 <th>host</th>
                 <th>path</th>
                 <th>note</th>
               </tr>
-              <!-- Press on a rule and drag across the others to paint them all
-                   to the state the first one flipped to. -->
-              <!-- The checkbox, the host and the path are the toggle: press on
-                   one and drag down the column to paint a run of rules. The
-                   action swaps on a double click, and the note is text to edit,
-                   so neither of those starts a drag. -->
+              <!-- The gutter is the only thing a drag starts on: press on the
+                   left edge and pull down it to paint a run of rules to the
+                   state the first one flipped to. Everything right of the
+                   gutter is a live field, so a click there puts a caret in the
+                   text rather than toggling the row, and there is no editor to
+                   open or dismiss. -->
               <tr v-for="(rule, i) in r.detail" :key="i" class="rule"
                   :class="{off: !rule.enabled}">
-                <td class="grab" style="width:1%"
+                <td class="grab" style="width:1.6rem"
+                    :title="'drag down the edge to turn a run ' + (rule.enabled ? 'off' : 'on')"
                     @mousedown.prevent="paintStart(r, i)" @mouseenter="paintOver(r, i)">
-                  <input type="checkbox" :checked="rule.enabled"
+                  <!-- The box is a picture of the row's state; the cell around
+                       it takes the press, so a drag started near it still
+                       catches. -->
+                  <input type="checkbox" tabindex="-1" :checked="rule.enabled"
                          @mousedown.stop @change="toggleRule(r, i, $event)">
                 </td>
                 <td :class="rule.action" class="swap" style="width:1%"
-                    :title="'double click to make this ' + (rule.action === 'deny' ? 'allow' : 'deny')"
-                    @dblclick="swapAction(r, i)">{{ rule.action }}</td>
-                <td class="mono grab"
-                    @mousedown.prevent="paintStart(r, i)" @mouseenter="paintOver(r, i)">
-                  {{ rule.match }}
+                    :title="'click to make this ' + (rule.action === 'deny' ? 'allow' : 'deny')"
+                    @click="swapAction(r, i)">{{ rule.action }}</td>
+                <td style="width:30%">
+                  <input class="cell mono" v-model="rule.match"
+                         @change="saveField(r, i, 'match')"
+                         @keyup.enter="$event.target.blur()">
                 </td>
-                <td class="mono dim grab"
-                    @mousedown.prevent="paintStart(r, i)" @mouseenter="paintOver(r, i)">
-                  {{ rule.path || '' }}
+                <td style="width:25%">
+                  <input class="cell mono dim" v-model="rule.path"
+                         placeholder="/any/path/*"
+                         @change="saveField(r, i, 'path')"
+                         @keyup.enter="$event.target.blur()">
                 </td>
-                <!-- mousedown is stopped here so that clicking into the note
-                     edits it rather than starting a paint; a drag that passes
-                     over the cell still toggles the row. -->
-                <td class="dim">
-                  <input v-if="rule.editing" v-focus v-model="rule.note" size="34"
-                         @keyup.enter="saveNote(r, i)" @keyup.esc="cancelNote(rule)"
-                         @blur="saveNote(r, i)">
-                  <span v-else @click="editNote(rule)">
-                    {{ rule.note || 'note this rule' }}
-                  </span>
+                <td>
+                  <input class="cell dim" v-model="rule.note"
+                         placeholder="note this rule"
+                         @change="saveField(r, i, 'note')"
+                         @keyup.enter="$event.target.blur()">
                 </td>
               </tr>
               <!-- The blank row at the end grows another one as soon as it has
                    a pattern in it, so several rules can be typed in a run and
                    committed together. -->
-              <tr v-for="(d, j) in r.draft" :key="'draft' + j" @mousedown.stop>
+              <tr v-for="(d, j) in r.draft" :key="'draft' + j">
                 <td></td>
                 <td>
                   <select v-model="d.action">
@@ -413,9 +425,14 @@ const app = Vue.createApp({
       });
       await Promise.all(this.rulesets.filter(r => r.open).map(r => this.loadRules(r)));
     },
-    async loadRules(ruleset) {
-      const rules = (await api('/api/rulesets/' + ruleset.file)).rules;
-      ruleset.detail = rules.map(rule => Object.assign({editing: false, was: null}, rule));
+    async loadRules(ruleset, force) {
+      // Every write emits a state event, including this page's own, and the
+      // rule fields are always live inputs. Replacing them under a caret would
+      // wipe a half-typed host, so whoever is typing wins and the reload waits
+      // for the next event after they are done. A refused write forces it
+      // anyway: what is on screen is then known to be wrong.
+      if (!force && document.activeElement?.classList.contains('cell')) return;
+      ruleset.detail = (await api('/api/rulesets/' + ruleset.file)).rules;
     },
     async loadLog() { this.log = (await api('/api/log')).log; },
     async purge(choice) {
@@ -476,6 +493,10 @@ const app = Vue.createApp({
       }
     },
     paintStart(ruleset, index) {
+      // The press on the gutter has its default prevented, so it does not move
+      // focus by itself and a field left mid-edit would never fire its change.
+      // Taking focus away here is what commits it before the paint lands.
+      if (document.activeElement?.classList.contains('cell')) document.activeElement.blur();
       this.paint = {
         file: ruleset.file,
         enabled: !ruleset.detail[index].enabled,
@@ -505,7 +526,7 @@ const app = Vue.createApp({
         await put('/api/rulesets/' + ruleset.file + '/rules', {index, action});
       } catch (e) {
         this.error = e.message;
-        await this.loadRules(ruleset);
+        await this.loadRules(ruleset, true);
       }
     },
     toggleRule(ruleset, index, event) {
@@ -537,26 +558,16 @@ const app = Vue.createApp({
       }
       await this.loadPolicy();  // the rule count moved
     },
-    editNote(rule) {
-      rule.was = rule.note;
-      rule.editing = true;
-    },
-    cancelNote(rule) {
-      // Before the input goes away, so the blur it fires finds nothing to save.
-      rule.editing = false;
-      rule.note = rule.was;
-    },
-    async saveNote(ruleset, index) {
-      const rule = ruleset.detail[index];
-      if (!rule.editing) return;  // blur fires again after Enter
-      rule.editing = false;
+    async saveField(ruleset, index, key) {
+      // `change` fires on blur and only for a field that was actually typed
+      // in, so this is one write per edit and none for a field passed through.
       this.error = '';
       try {
         await put('/api/rulesets/' + ruleset.file + '/rules',
-                  {index, note: rule.note});
+                  {index, [key]: ruleset.detail[index][key] ?? ''});
       } catch (e) {
-        this.error = e.message;
-        await this.loadRules(ruleset);
+        this.error = e.message;  // an empty host, most likely
+        await this.loadRules(ruleset, true);  // the file won, whatever it says
       }
     },
     async saveRules(file, indexes, enabled) {
