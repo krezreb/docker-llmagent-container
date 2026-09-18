@@ -509,8 +509,10 @@ rules:
 
 A rule is `{ match, path?, action, note? }`:
 
-- `match` — the host. A glob (`*.example.com`), or a regular expression when written
-  as `/.../`. Matched case-insensitively against the hostname only, never the port.
+- `match` — the host. A glob (`*.example.com`), a CIDR (`10.0.0.0/8`, `fd00::/8`),
+  or a regular expression when written as `/.../`. Matched case-insensitively against
+  the hostname only, never the port. A CIDR matches only a request made to a literal
+  IP address in that range; a name is never resolved to compare it.
 - `path` — optional glob against the request path. Absent means any path. Under a
   `tunnel` rule, or for a request the proxy is not intercepting, the path is unknown,
   and a rule carrying `path` therefore cannot match.

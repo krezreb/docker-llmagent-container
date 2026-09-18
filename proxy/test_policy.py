@@ -74,6 +74,30 @@ rules:
     assert p.decide("c.example.com", "/")[0] == "pending"
 
 
+def test_cidr_rules():
+    p = Policy(
+        state(
+            {
+                "r.yml": """
+name: r
+rules:
+  - {match: "10.0.0.0/8", action: allow, note: lan}
+  - {match: "192.168.5.7/32", action: deny, note: one box}
+  - {match: "fd00::/8", action: allow, note: ula}
+"""
+            }
+        )
+    )
+    assert p.decide("10.1.2.3", "/")[0] == "allow"
+    assert p.decide("11.1.2.3", "/")[0] == "pending"
+    assert p.decide("192.168.5.7", "/")[0] == "deny"
+    assert p.decide("[fd00::1]", "/")[0] == "allow"
+    assert p.decide("fd00::1", "/")[0] == "allow"
+    # A name is not an address, and an IPv4 host is not inside an IPv6 net.
+    assert p.decide("10.0.0.0.example.com", "/")[0] == "pending"
+    assert p.decide("10.1.2.3", "/")[0] == "allow"
+
+
 def test_path_rules():
     p = Policy(
         state(

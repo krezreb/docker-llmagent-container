@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import fnmatch
+import functools
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -23,10 +25,27 @@ MODES = ("lockdown", "default-deny", "default-allow", "log-only")
 DEFAULT_SETTINGS = {"mode": "default-deny", "pending_timeout": 30}
 
 
+@functools.lru_cache(maxsize=None)
+def _network(pattern: str):
+    """The pattern read as an IP network, or None if it is not one."""
+    try:
+        return ipaddress.ip_network(pattern, strict=False)
+    except ValueError:
+        return None
+
+
 def match_host(pattern: str, host: str) -> bool:
-    """A glob against the hostname, or a regular expression written as /.../."""
+    """A glob against the hostname, a CIDR, or a regex written as /.../."""
     if len(pattern) > 2 and pattern.startswith("/") and pattern.endswith("/"):
         return re.search(pattern[1:-1], host, re.IGNORECASE) is not None
+    if "/" in pattern:
+        net = _network(pattern)
+        if net is not None:
+            try:
+                # A literal IPv6 host arrives bracketed from a Host header.
+                return ipaddress.ip_address(host.strip("[]")) in net
+            except ValueError:
+                return False  # a name is not an address, so no CIDR covers it
     return fnmatch.fnmatchcase(host.lower(), pattern.lower())
 
 
@@ -441,7 +460,9 @@ class Policy:
             "pending_timeout": self.timeout,
             "rulesets": [
                 {"name": r.name, "file": r.filename, "description": r.description,
-                 "enabled": r.enabled, "rules": len(r.rules)}
+                 "enabled": r.enabled,
+                 "allows": sum(1 for rule in r.rules if rule.action == "allow"),
+                 "denies": sum(1 for rule in r.rules if rule.action != "allow")}
                 for r in (self.rulesets[f] for f in sorted(self.rulesets))
             ],
             "effective": effective,
