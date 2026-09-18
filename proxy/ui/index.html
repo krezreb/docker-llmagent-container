@@ -170,6 +170,10 @@
           <option>allow</option><option>deny</option><option>tunnel</option>
         </select>
         <span class="dim">{{ shown.length }} of {{ log.length }}</span>
+        <span class="dim" style="margin-left:auto">purge</span>
+        <button v-for="p in purges" :key="p.seconds" :disabled="!log.length"
+                :class="{danger: !p.seconds}" :title="p.title"
+                @click="purge(p)">{{ p.label }}</button>
       </div>
       <table>
         <tbody>
@@ -359,6 +363,14 @@ const app = Vue.createApp({
     fetchedAt: Date.now(), now: Date.now(), newRuleset: '', error: '',
     paint: null,
     filter: {host: '', cat: '', decision: ''},
+    // Purging is not undoable: it rewrites the log on disk as well as the
+    // ring, so everything but the age buttons asks first.
+    purges: [
+      {seconds: 300, label: '> 5 min', title: 'Drop records older than 5 minutes'},
+      {seconds: 3600, label: '> 1 hour', title: 'Drop records older than an hour'},
+      {seconds: 86400, label: '> 1 day', title: 'Drop records older than a day'},
+      {seconds: 0, label: 'everything', title: 'Drop every record, on disk too'},
+    ],
   }),
 
   computed: {
@@ -406,6 +418,12 @@ const app = Vue.createApp({
       ruleset.detail = rules.map(rule => Object.assign({editing: false, was: null}, rule));
     },
     async loadLog() { this.log = (await api('/api/log')).log; },
+    async purge(choice) {
+      if (!choice.seconds && !confirm('Drop every log record, on disk too?')) return;
+      await api('/api/log?seconds=' + choice.seconds, {method: 'DELETE'});
+      // The server answers with what it dropped, but the purge event that
+      // follows is what trims the table — one path for this tab and the rest.
+    },
     async loadPending() {
       const previous = Object.fromEntries(this.pending.map(p => [p.key, p]));
       this.pending = (await api('/api/pending')).pending.map(p => Object.assign(p, {
@@ -429,6 +447,10 @@ const app = Vue.createApp({
         events.addEventListener(kind, () => this.loadPending());
       }
       events.addEventListener('state', () => this.loadPolicy());
+      events.addEventListener('purge', e => {
+        const before = JSON.parse(e.data).before;
+        this.log = before ? this.log.filter(r => r.ts > before) : [];
+      });
     },
 
     elapsed(entry) {

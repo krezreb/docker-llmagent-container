@@ -24,6 +24,8 @@ DEFAULTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "defaults")
 CA_DIR = os.path.join(STATE, "ca")           # mitmproxy's confdir: holds the key
 AGENT_CA_DIR = os.path.join(STATE, "agent-ca")  # the certificate alone, mounted
                                                 # into agent containers
+LOG_FILE = os.path.join(STATE, "log.jsonl")  # the record of section 10, kept
+                                             # across restarts
 
 FORBIDDEN = """403 Forbidden
 
@@ -92,7 +94,7 @@ class Ctx:
     """What api.py is handed: the shared objects, not a copy of them."""
 
     def __init__(self):
-        self.log = Log()
+        self.log = Log(path=LOG_FILE)
         self.policy = policy_mod.Policy(STATE, emit=self.log.event)
         self.trusted = None  # set in running(), once there is a route table
 

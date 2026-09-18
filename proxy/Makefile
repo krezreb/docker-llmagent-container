@@ -25,6 +25,7 @@ build:
 # is silent. Needs the image, since pyyaml lives in it and not on the host.
 test: build
 	docker run --rm --entrypoint python3 $(IMAGE) /app/test_policy.py
+	docker run --rm --entrypoint python3 $(IMAGE) /app/test_log.py
 
 # Leaves /state alone: it holds the CA and the rulesets, and regenerating the
 # CA means re-trusting it everywhere.

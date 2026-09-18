@@ -628,9 +628,17 @@ from traffic shape. A category that is wrong is fixed by editing one line.
 
 ## 10. Log record
 
-One JSON object per request, on **stdout**, and pushed to connected UIs over SSE.
+One JSON object per request, on **stdout**, appended to `/state/log.jsonl`, and
+pushed to connected UIs over SSE.
 This schema is a contract: downstream `vector` and Elasticsearch configurations
 depend on it, so fields are added but never renamed or repurposed.
+
+`/state/log.jsonl` is what makes the record survive a restart: stdout goes to
+docker's log, which a `compose down` takes with it, and the ring buffer the UI
+seeds from is process memory. The file rotates at 64 MB with one older file
+kept, and on start the ring is refilled from its tail, so the UI opens on the
+requests that came before the restart rather than on nothing. A line left
+half-written by a kill is skipped.
 
 ```json
 {"ts":"2026-09-18T10:22:31.412Z","id":"01J8Z3...","client":"dev-agent-claude-4711",
@@ -720,8 +728,9 @@ switched off its own sandbox with one HTTP call.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/policy` | Mode, enabled rulesets, effective allow and deny lists. Also served read-only on `8098`; the endpoint the agent's skill uses. |
-| `GET` | `/api/events` | SSE. Events: `request` (a log record), `pending` (a new held request), `resolved` (a held request decided), `state` (mode or rulesets changed). |
+| `GET` | `/api/events` | SSE. Events: `request` (a log record), `pending` (a new held request), `resolved` (a held request decided), `state` (mode or rulesets changed), `purge` (records cleared, with the cutoff so every open UI trims the same rows). |
 | `GET` | `/api/log?since=&host=&cat=&decision=` | Recent records from the ring buffer (5000 entries). |
+| `DELETE` | `/api/log?seconds=` | Purge records older than `seconds`, or all of them when it is absent or `0`. Clears the ring and rewrites `/state/log.jsonl`, so a restart does not bring back what was cleared. The age is resolved against the proxy's clock, not the UI's. Operator only, like every other write. |
 | `GET` | `/api/mode` | Current mode. |
 | `PUT` | `/api/mode` | `{"mode": "..."}`. |
 | `GET` | `/api/rulesets` | Every ruleset with its enabled state, rule count and description. |
@@ -806,6 +815,10 @@ documented path never touches code that can mutate anything; the subnet guard on
 Vue 3, one page, three panes.
 
 - **Live log.** Newest first, streaming from `/api/events`, seeded from `/api/log`.
+  Purge buttons — older than 5 minutes, an hour, a day, or everything — call
+  `DELETE /api/log`. Only *everything* asks for confirmation: an age cutoff is
+  the ordinary way to keep the panel readable, while clearing the lot is the one
+  that can throw away the record of something an operator has not looked at yet.
   Filter by host, category and decision; click a row for the full record.
 - **Pending.** One row per ask key, not per request: method, URL, category, client,
   the elapsed time of the longest waiter and the waiter count when it is above one.

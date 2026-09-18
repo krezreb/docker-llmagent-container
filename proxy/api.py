@@ -18,7 +18,7 @@ import struct
 import tornado.iostream
 import tornado.web
 
-from log import warn
+from log import now, warn
 
 UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
 
@@ -247,6 +247,18 @@ class LogTail(Base):
             }
         )
 
+    def delete(self):
+        """Clear the record: everything, or everything older than `seconds`.
+        The age is resolved here rather than sent as a timestamp, so a UI
+        whose clock differs from the proxy's still purges what it displayed."""
+        try:
+            seconds = float(self.get_argument("seconds", 0))
+        except ValueError:
+            raise tornado.web.HTTPError(400, reason="seconds must be a number")
+        if seconds < 0:
+            raise tornado.web.HTTPError(400, reason="seconds cannot be negative")
+        self.write({"dropped": self.ctx.log.purge(now(seconds) if seconds else None)})
+
 
 class Events(Base):
     async def get(self):
@@ -291,7 +303,8 @@ class Index(tornado.web.RequestHandler):
             "                          or {\"index\": 0, \"note\": \"...\"}\n"
             "                          or {\"index\": 0, \"action\": \"deny\"}\n"
             "  GET  /api/pending       POST /api/pending/<key> {\"decision\": \"allow\"}\n"
-            "  GET  /api/log           GET /api/events (SSE)\n"
+            "  GET  /api/log           DELETE /api/log?seconds=3600\n"
+            "  GET  /api/events (SSE)\n"
         )
 
 
