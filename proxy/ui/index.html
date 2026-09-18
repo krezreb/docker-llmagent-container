@@ -253,9 +253,18 @@
             </template>
             <template v-else>
               <button class="plain" :title="r.file" @click="expand(r)">
-                <strong>{{ r.name }}</strong>
-                <span class="dim">({{ r.rules }})</span>
-                <span class="dim">{{ r.open ? '▾' : '▸' }}</span>
+                <!-- Vue condenses the whitespace between these elements away,
+                     so the gaps around the count are written out. -->
+                <strong>{{ r.name }}</strong>&nbsp;<!--
+                     Allows and denies are counted apart and coloured like the
+                     action column, so the shape of a ruleset reads at a glance
+                     without opening it. A ruleset of one kind shows one number.
+                --><span class="dim">(</span><!--
+                --><span class="allow" v-if="r.allows || !r.denies">{{ r.allows }}</span><!--
+                --><span class="dim" v-if="r.allows && r.denies">/</span><!--
+                --><span class="deny" v-if="r.denies">{{ r.denies }}</span><!--
+                --><span class="dim">)</span>&nbsp;<!--
+                --><span class="dim">{{ r.open ? '▾' : '▸' }}</span>
               </button>
               <button class="plain dim" @click="expand(r)">
                 {{ r.description || 'no description' }}
