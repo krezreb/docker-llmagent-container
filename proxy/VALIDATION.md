@@ -214,6 +214,77 @@ mode PUT on 8099 -> 403
 while `GET /api/policy` on `8098` returned the policy. The agent can read the policy
 and cannot change it, on either port, which is the whole point of two of them.
 
+## One network per agent (SPEC section 5) — CONFIRMED
+
+A single shared `agents` network let any two sessions reach each other. Two throwaway
+containers on `dev-agent_agents`, docker 29.8.1:
+
+```
+$ docker exec t-b nc -w2 t-a 9000
+HI
+```
+
+By container name, not merely by IP: docker's embedded resolver answers for every
+member of the network, and `internal: true` changes none of it.
+
+`com.docker.network.bridge.enable_icc=false` is not the fix. On a network created
+with it, a container reached neither a second container nor the proxy:
+
+```
+--- b -> a:  BLOCKED
+--- b -> p:  BLOCKED
+```
+
+One internal network per container, with the proxy attached to each, gives the
+intended shape. Measured through `dev-agent --proxy` itself, two concurrent
+sessions, agent A listening on 9000:
+
+```
+control, A to its own listener: 200
+B-to-A-by-name: BLOCKED        (curl: Could not resolve host)
+B-to-A-by-ip:   BLOCKED        (172.24.0.3, no route)
+B-to-internet-via-proxy: 405   (api.anthropic.com, allowed by default.yml)
+```
+
+The control matters: without something listening, the two `BLOCKED` lines would be
+the same output for the wrong reason.
+
+Nothing downstream broke. The `client` field still resolved:
+
+```json
+{"client":"dev-agent-bash-112170","host":"api.anthropic.com","status":405,
+ "decision":"allow","rule":"default.yml:Claude API"}
+```
+
+and the subnet guard still trusted `egress` and not the session's network
+(`trusted peers: 172.23.0.0/16`, with the agent on `172.24.0.0/16`).
+
+The network is removed on the way out, and the exit status is docker's:
+
+```
+$ dev-agent --proxy bash -c 'echo inside; exit 7'
+inside
+dev-agent exit status: 7
+after: 0 agent networks
+proxy nets now: dev-agent_egress
+```
+
+A session killed with `SIGKILL` leaves its network behind — reproduced by killing the
+wrapper — which is what the `docker network rm --force` at the start of the next run
+under the same name is for.
+
+This is `assumption 5` in `spike/check.sh`, so it is checked rather than remembered.
+
+**Two pre-existing faults in `spike/check.sh` surfaced while adding it**, and are
+fixed in the same change: `mktemp -d` leaves the CA directory at `0700`, so every
+certificate check failed with `EACCES` on a file that was plainly there, and
+`-f "{{.NetworkSettings.Networks.spike-agents.IPAddress}}"` dies with
+`bad character U+002D` because a dash is not legal in a Go template field name — which
+aborted the run under `set -e` before the DNS check could report. The harness also
+lacked the `NODE_OPTIONS=--use-env-proxy` that `dev-agent` passes, so the `node` check
+was failing for that and not for the trust store. With those three fixed the spike is
+13 passed, 0 failed.
+
 ## What is still unmeasured
 
 - **Whether the agents tolerate a held flow.** Assumption 3 is confirmed for `curl`,

@@ -8,6 +8,8 @@
 #   2b. TLS interception works with the CA wired the way SPEC.md section 7 says,
 #       on a read-only root filesystem
 #   4. reverse DNS on the docker network yields the client container's name
+#   5. two agents on two internal networks, with the proxy on both, can reach
+#      the proxy and not each other
 #
 # Assumption 3 (holding a flow) needs the addon and is not covered here.
 #
@@ -18,6 +20,7 @@ set -euo pipefail
 IMAGE="${DEV_AGENT_IMAGE:-dev-agent:ubuntu26}"
 MITM_IMAGE="${MITM_IMAGE:-mitmproxy/mitmproxy:latest}"
 NET_AGENTS=spike-agents
+NET_AGENTS_B=spike-agents-b
 NET_EGRESS=spike-egress
 PROXY=spike-proxy
 CA_DIR="$(mktemp -d)"
@@ -31,21 +34,22 @@ note() { printf '  ....  %s\n' "$1"; }
 head_() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 cleanup() {
-    docker rm -f "$PROXY" >/dev/null 2>&1 || true
-    docker network rm "$NET_AGENTS" "$NET_EGRESS" >/dev/null 2>&1 || true
+    docker rm -f "$PROXY" spike-peer >/dev/null 2>&1 || true
+    docker network rm "$NET_AGENTS" "$NET_AGENTS_B" "$NET_EGRESS" >/dev/null 2>&1 || true
     rm -rf "$CA_DIR"
 }
 trap cleanup EXIT
 
-# Runs a command in a throwaway container on the agents network only, with the
-# same hardening dev-agent uses. Extra docker args come before '--'.
+# Runs a command in a throwaway container on an agent network only, with the
+# same hardening dev-agent uses. Extra docker args come before '--'. $NET picks
+# the network, and defaults to the first one.
 in_agent() {
-    local args=()
+    local args=() net="${NET:-$NET_AGENTS}"
     while [[ "$1" != "--" ]]; do args+=("$1"); shift; done
     shift
 
     docker run --rm \
-        --network "$NET_AGENTS" \
+        --network "$net" \
         --read-only \
         --cap-drop=ALL \
         --security-opt=no-new-privileges:true \
@@ -85,6 +89,7 @@ note "proxy up, CA generated"
 docker run --rm -v "$CA_DIR:/ca" "$IMAGE" \
     bash -c 'cat /etc/ssl/certs/ca-certificates.crt /ca/mitmproxy-ca-cert.pem' \
     > "$CA_DIR/bundle.crt"
+chmod a+rx "$CA_DIR"
 chmod a+r "$CA_DIR"/*.pem "$CA_DIR/bundle.crt"
 
 PROXY_ENV=(
@@ -98,6 +103,9 @@ PROXY_ENV=(
     --env GIT_SSL_CAINFO=/etc/dev-agent-ca/bundle.crt
     --env REQUESTS_CA_BUNDLE=/etc/dev-agent-ca/bundle.crt
     --env NODE_EXTRA_CA_CERTS=/etc/dev-agent-ca/mitmproxy-ca-cert.pem
+    # node reads neither HTTP_PROXY nor HTTPS_PROXY on its own, so without
+    # this it connects direct and fails at DNS. dev-agent passes it too.
+    --env NODE_OPTIONS=--use-env-proxy
 )
 
 head_ "assumption 1 — isolation isolates"
@@ -165,7 +173,8 @@ head_ "assumption 4 — reverse DNS names the client"
 
 client_ip="$(docker run -d --rm --name spike-client --network "$NET_AGENTS" \
     "$IMAGE" sleep 20 >/dev/null && \
-    docker inspect -f "{{.NetworkSettings.Networks.${NET_AGENTS}.IPAddress}}" spike-client)"
+    docker inspect \
+        -f "{{(index .NetworkSettings.Networks \"$NET_AGENTS\").IPAddress}}" spike-client)"
 
 resolved="$(docker exec "$PROXY" python3 -c \
     "import socket;print(socket.gethostbyaddr('$client_ip')[0])" 2>/dev/null || true)"
@@ -176,6 +185,51 @@ if [[ "$resolved" == *spike-client* ]]; then
 else
     bad "reverse DNS gave '${resolved:-nothing}' for $client_ip; log the IP instead"
 fi
+
+head_ "assumption 5 — two agents cannot reach each other"
+
+# The shape dev-agent creates per container: a second internal network, with
+# the proxy attached to that one as well. Each agent must reach the proxy and
+# nothing else — a single shared network would leave the two agents able to
+# reach each other, which is what this is here to catch.
+docker network create --internal "$NET_AGENTS_B" >/dev/null
+docker network connect "$NET_AGENTS_B" "$PROXY"
+
+docker run -d --rm --name spike-peer --network "$NET_AGENTS" \
+    "$IMAGE" python3 -m http.server 9000 >/dev/null
+for _ in $(seq 15); do
+    in_agent -- 'curl -sS -m 2 http://spike-peer:9000/ -o /dev/null' 2>/dev/null && break
+    sleep 1
+done
+
+peer_ip="$(docker inspect \
+    -f "{{(index .NetworkSettings.Networks \"$NET_AGENTS\").IPAddress}}" spike-peer)"
+
+# Control first: without it, both probes below could pass because nothing was
+# ever listening.
+if in_agent -- 'curl -sS -m 8 http://spike-peer:9000/ -o /dev/null' 2>/dev/null; then
+    ok "the peer's listener answers from its own network (control)"
+else
+    bad "the peer's listener never came up; the two probes below prove nothing"
+fi
+
+for target in spike-peer "$peer_ip"; do
+    if NET="$NET_AGENTS_B" in_agent -- \
+        "curl -sS -m 8 http://$target:9000/ -o /dev/null" 2>/dev/null; then
+        bad "reached the other agent at $target from a second agent network"
+    else
+        ok "no route to the other agent at $target"
+    fi
+done
+
+if NET="$NET_AGENTS_B" in_agent "${PROXY_ENV[@]}" -- \
+    'curl -sS -m 15 https://example.com -o /dev/null'; then
+    ok "the second agent network still reaches the internet through the proxy"
+else
+    bad "the second agent network cannot reach the proxy"
+fi
+
+docker rm -f spike-peer >/dev/null 2>&1 || true
 
 head_ "informational — residual DNS channel (SPEC.md section 4)"
 

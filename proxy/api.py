@@ -30,9 +30,9 @@ def trusted_subnet() -> ipaddress.IPv4Network | None:
     """The subnet of the interface carrying the default route.
 
     The operator's traffic arrives through a published port, SNAT'd to the
-    egress bridge gateway, so it is in that subnet by construction. The
-    `agents` network is `internal: true` and has no gateway, so it can never
-    carry the default route. Deriving the trusted subnet this way needs no
+    egress bridge gateway, so it is in that subnet by construction. An agent
+    network is `internal: true` and has no gateway, so it can never carry the
+    default route, however many of them are attached. Deriving the trusted subnet this way needs no
     guess about which of eth0/eth1 is which. SPEC section 11.3.
 
     None means nothing is trusted: the guard fails closed.
