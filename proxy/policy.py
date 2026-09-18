@@ -398,6 +398,31 @@ class Policy:
             return "allow", f"mode:{mode}"
         return "pending", f"mode:{mode}"
 
+    def disabled_allow(self, host: str, path: str | None) -> dict | None:
+        """The first allow rule that would have matched, were it switched on.
+
+        A pending ask usually means nothing covers the request — but sometimes
+        it means the rule that covers it, or its whole ruleset, is switched
+        off. The UI offers to switch it back on rather than have somebody save
+        a second copy of a rule they already wrote.
+        """
+        for filename in sorted(self.rulesets):
+            ruleset = self.rulesets[filename]
+            for index, rule in enumerate(ruleset.rules):
+                if rule.action != "allow" or not rule.matches(host, path):
+                    continue
+                if ruleset.enabled and rule.enabled:
+                    continue  # it matched and is on, so this was never pending
+                return {
+                    "file": filename,
+                    "ruleset": ruleset.name,
+                    "index": index,
+                    "rule": rule.note or rule.match,
+                    "ruleset_off": not ruleset.enabled,
+                    "rule_off": not rule.enabled,
+                }
+        return None
+
     def snapshot(self) -> dict:
         """What GET /api/policy serves, on both ports."""
         effective = {"allow": [], "deny": [], "tunnel": []}
@@ -440,6 +465,7 @@ class PendingEntry:
     url: str
     cat: str
     created: float
+    disabled_allow: dict | None = None
     clients: set = field(default_factory=set)
     waiters: set = field(default_factory=set)
 
@@ -451,6 +477,7 @@ class PendingEntry:
             "path": self.path,
             "url": self.url,
             "cat": self.cat,
+            "disabled_allow": self.disabled_allow,
             "clients": sorted(self.clients),
             "waiters": len(self.waiters),
             "waiting_ms": int((time.time() - self.created) * 1000),
@@ -469,7 +496,8 @@ class PendingQueue:
         key = ask_key(method, host, path)
         entry = self.entries.get(key)
         if entry is None:
-            entry = PendingEntry(key, method, host, path, url, cat, time.time())
+            entry = PendingEntry(key, method, host, path, url, cat, time.time(),
+                                 self.policy.disabled_allow(host, path))
             self.entries[key] = entry
         entry.clients.add(client)
 
@@ -492,10 +520,21 @@ class PendingQueue:
 
         return decision, rule
 
-    def resolve(self, key: str, decision: str, save_to=None, scope="host") -> int:
+    def resolve(self, key: str, decision: str, save_to=None, scope="host",
+                enable: bool = False) -> int:
         entry = self.entries.get(key)
         if entry is None:
             raise KeyError(key)
+
+        # Switching the existing rule back on, instead of saving a duplicate:
+        # both halves, because a rule that is off inside a ruleset that is off
+        # would otherwise come straight back as the next ask.
+        spot = entry.disabled_allow
+        if enable and spot:
+            if spot["ruleset_off"]:
+                self.policy.set_enabled(spot["file"], True)
+            if spot["rule_off"]:
+                self.policy.set_rules_enabled(spot["file"], [spot["index"]], True)
 
         if save_to:
             path = None

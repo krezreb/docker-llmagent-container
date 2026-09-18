@@ -223,7 +223,8 @@ class Pending(Base):
             raise tornado.web.HTTPError(400, reason="decision must be allow or deny")
         try:
             resolved = self.ctx.policy.pending.resolve(
-                key, decision, body.get("save_to"), body.get("scope", "host")
+                key, decision, body.get("save_to"), body.get("scope", "host"),
+                enable=bool(body.get("enable")),
             )
         except KeyError as exc:
             raise tornado.web.HTTPError(

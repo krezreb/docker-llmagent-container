@@ -737,7 +737,7 @@ switched off its own sandbox with one HTTP call.
 | `GET` | `/api/rulesets/<name>` | One ruleset, with its rules. |
 | `PUT` | `/api/rulesets/<name>` | `{"enabled": true \| false}`. |
 | `GET` | `/api/pending` | Currently held asks, each with its key, method, URL, category, clients and waiter count. |
-| `POST` | `/api/pending/<key>` | `{"decision":"allow" \| "deny", "save_to":"<ruleset>", "scope":"host" \| "host+path"}`. `<key>` is the ask key of section 8.3, so one call resolves every request waiting on it. |
+| `POST` | `/api/pending/<key>` | `{"decision":"allow" \| "deny", "save_to":"<ruleset>", "scope":"host" \| "host+path", "enable":true}`. `<key>` is the ask key of section 8.3, so one call resolves every request waiting on it. `enable` switches the disabled allow rule the entry reports in `disabled_allow` (and its ruleset, if that is what is off) back on instead of saving a second rule for the same host. |
 
 ### 11.2 The read-only subset
 

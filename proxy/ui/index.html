@@ -147,6 +147,12 @@
           <td class="mono">
             {{ p.method || 'CONNECT' }} <span class="truncate">{{ p.url }}</span>
             <span v-if="p.waiters > 1" class="tag">{{ p.waiters }} waiters</span>
+            <!-- A rule for this already exists, switched off; say so, so the
+                 answer is to switch it on rather than to write a second one. -->
+            <div v-if="p.disabled_allow" class="pending">
+              allowed by “{{ p.disabled_allow.rule }}” in {{ p.disabled_allow.ruleset }},
+              but {{ p.disabled_allow.ruleset_off ? 'that ruleset is off' : 'that rule is off' }}
+            </div>
           </td>
           <td class="dim">{{ p.cat }}</td>
           <td class="dim mono">{{ p.clients.join(', ') }}</td>
@@ -158,7 +164,9 @@
                  the rule goes and how wide it is, which is the same question
                  whichever way the answer falls. -->
             <span class="save">
-              <button @click="resolve(p, 'allow', true)">Always Allow</button>
+              <button v-if="p.disabled_allow" @click="resolve(p, 'allow', false, true)">
+                Allow and enable rule</button>
+              <button v-else @click="resolve(p, 'allow', true)">Always Allow</button>
               <button class="danger" @click="resolve(p, 'deny', true)">Always Deny</button>
               <select v-model="p.scope">
                 <option value="host">host</option>
@@ -617,17 +625,18 @@ const app = Vue.createApp({
       ruleset.open = !ruleset.open;
       if (ruleset.open && !ruleset.detail.length) await this.loadRules(ruleset);
     },
-    async resolve(entry, decision, save) {
+    async resolve(entry, decision, save, enable) {
       await api('/api/pending/' + entry.key, {
         method: 'POST', headers: {'content-type': 'application/json'},
         body: JSON.stringify({
           decision,
           save_to: save ? entry.saveTo : null,
           scope: entry.scope,
+          enable: !!enable,
         }),
       });
       this.pending = this.pending.filter(p => p.key !== entry.key);
-      if (save) this.loadPolicy();  // the rule count on the pane below moved
+      if (save || enable) this.loadPolicy();  // a rule count or a toggle moved
     },
   },
 });

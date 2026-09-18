@@ -555,6 +555,58 @@ description: rules are not the last key here
     assert fresh.rulesets["r.yml"].description == "rules are not the last key here"
 
 
+OFF_ALLOW = """
+name: Sleeping
+enabled: true
+rules:
+  - {match: pypi.org, action: allow, note: packages, enabled: false}
+"""
+
+
+def test_a_pending_ask_names_the_disabled_allow_rule_and_can_switch_it_on():
+    directory = state({"r.yml": OFF_ALLOW})
+    p = Policy(directory)
+
+    async def run():
+        ask = asyncio.create_task(
+            p.pending.ask("GET", "pypi.org", "/simple/",
+                          "https://pypi.org/simple/", "os-pkg", "c1")
+        )
+        await asyncio.sleep(0.05)
+        entry = list(p.pending.entries.values())[0]
+        assert entry.as_json()["disabled_allow"] == {
+            "file": "r.yml", "ruleset": "Sleeping", "index": 0, "rule": "packages",
+            "ruleset_off": False, "rule_off": True,
+        }, entry.as_json()["disabled_allow"]
+        p.pending.resolve(entry.key, "allow", enable=True)
+        assert await ask == ("allow", "pending:allow")
+
+    asyncio.run(run())
+    # Switched on rather than duplicated: still one rule, and it decides now.
+    fresh = Policy(directory)
+    assert len(fresh.rulesets["r.yml"].rules) == 1
+    assert fresh.decide("pypi.org", "/simple/")[0] == "allow"
+
+
+def test_a_disabled_ruleset_is_reported_and_switched_on_too():
+    directory = state({"r.yml": ALLOW_ALL.replace("name: a", "name: a\nenabled: false")})
+    p = Policy(directory)
+
+    async def run():
+        ask = asyncio.create_task(
+            p.pending.ask("GET", "example.com", "/", "https://example.com/", "x", "c1")
+        )
+        await asyncio.sleep(0.05)
+        entry = list(p.pending.entries.values())[0]
+        spot = entry.as_json()["disabled_allow"]
+        assert (spot["ruleset_off"], spot["rule_off"]) == (True, False), spot
+        p.pending.resolve(entry.key, "allow", enable=True)
+        await ask
+
+    asyncio.run(run())
+    assert Policy(directory).decide("example.com", "/")[0] == "allow"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for test in tests:
