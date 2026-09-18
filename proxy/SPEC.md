@@ -628,9 +628,17 @@ from traffic shape. A category that is wrong is fixed by editing one line.
 
 ## 10. Log record
 
-One JSON object per request, on **stdout**, and pushed to connected UIs over SSE.
+One JSON object per request, on **stdout**, appended to `/state/log.jsonl`, and
+pushed to connected UIs over SSE.
 This schema is a contract: downstream `vector` and Elasticsearch configurations
 depend on it, so fields are added but never renamed or repurposed.
+
+`/state/log.jsonl` is what makes the record survive a restart: stdout goes to
+docker's log, which a `compose down` takes with it, and the ring buffer the UI
+seeds from is process memory. The file rotates at 64 MB with one older file
+kept, and on start the ring is refilled from its tail, so the UI opens on the
+requests that came before the restart rather than on nothing. A line left
+half-written by a kill is skipped.
 
 ```json
 {"ts":"2026-09-18T10:22:31.412Z","id":"01J8Z3...","client":"dev-agent-claude-4711",
