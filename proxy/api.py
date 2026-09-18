@@ -211,6 +211,22 @@ class Rules(Base):
         self.ctx.log.event("state", {"ruleset": filename})
         self.write({"ok": True, "rules": touched})
 
+    def delete(self, filename):
+        """Drop one rule. The index is a query argument: a DELETE body is not
+        carried by every client, and one number does not need one."""
+        if filename not in self.ctx.policy.rulesets:
+            raise tornado.web.HTTPError(404, reason="no such ruleset")
+        try:
+            index = int(self.get_argument("index"))
+        except ValueError:
+            raise tornado.web.HTTPError(400, reason="index must be a whole number")
+        try:
+            self.ctx.policy.delete_rule(filename, index)
+        except IndexError as exc:
+            raise tornado.web.HTTPError(404, reason=str(exc))
+        self.ctx.log.event("state", {"ruleset": filename})
+        self.write({"ok": True, "deleted": index})
+
 
 class Pending(Base):
     def get(self):
@@ -306,6 +322,7 @@ class Index(tornado.web.RequestHandler):
             "  PUT  /api/rulesets/<file>/rules {\"indexes\": [0, 2], \"enabled\": false}\n"
             "                          or {\"index\": 0, \"match\"|\"path\"|\n"
             "                              \"action\"|\"note\": \"...\"}\n"
+            "  DELETE /api/rulesets/<file>/rules?index=0\n"
             "  GET  /api/pending       POST /api/pending/<key> {\"decision\": \"allow\"}\n"
             "  GET  /api/log           DELETE /api/log?seconds=3600\n"
             "  GET  /api/events (SSE)\n"

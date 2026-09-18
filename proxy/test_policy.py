@@ -277,6 +277,32 @@ def test_toggling_rules_keeps_both_styles_and_the_comments():
     assert [r.enabled for r in Policy(directory).rulesets["m.yml"].rules] == [True] * 3
 
 
+def test_delete_rule_keeps_the_others_and_their_comments():
+    directory = state({"m.yml": MIXED})
+    p = Policy(directory)
+
+    p.delete_rule("m.yml", 1)  # the middle one, block style
+
+    text = open(os.path.join(directory, "rulesets", "m.yml")).read()
+    assert "b.example.com" not in text, text
+    assert "# a ruleset written by hand" in text, text
+    fresh = Policy(directory)
+    assert [r.match for r in fresh.rulesets["m.yml"].rules] == [
+        "a.example.com", "c.example.com"]
+    assert fresh.decide("b.example.com", "/")[0] == "pending"  # nothing decides it now
+
+    p.delete_rule("m.yml", 1)  # the flow one, now last
+    p.delete_rule("m.yml", 0)
+    assert Policy(directory).rulesets["m.yml"].rules == []
+
+    for bad in (0, -1, 3):
+        try:
+            p.delete_rule("m.yml", bad)
+        except IndexError:
+            continue
+        raise AssertionError(f"deleted rule {bad} of an empty ruleset")
+
+
 def test_set_rule_action():
     directory = state({"m.yml": MIXED})
     p = Policy(directory)

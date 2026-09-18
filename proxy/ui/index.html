@@ -279,6 +279,7 @@
                 <th>host</th>
                 <th>path</th>
                 <th>note</th>
+                <th style="width:1%"></th>
               </tr>
               <!-- The gutter is the only thing a drag starts on: press on the
                    left edge and pull down it to paint a run of rules to the
@@ -317,6 +318,12 @@
                          @change="saveField(r, i, 'note')"
                          @keyup.enter="$event.target.blur()">
                 </td>
+                <td style="width:1%">
+                  <!-- Deleting is the one edit on this row that cannot be
+                       typed back, so it asks first. -->
+                  <button class="plain danger" title="delete this rule"
+                          @click="deleteRule(r, i)">🗑</button>
+                </td>
               </tr>
               <!-- The blank row at the end grows another one as soon as it has
                    a pattern in it, so several rules can be typed in a run and
@@ -339,10 +346,11 @@
                 <td>
                   <input v-model="d.note" size="26" placeholder="what it is for">
                 </td>
+                <td></td>
               </tr>
               <tr v-if="drafted(r).length">
                 <td></td>
-                <td colspan="4">
+                <td colspan="5">
                   <button class="primary" @click="saveDrafts(r)">
                     save {{ drafted(r).length }} new
                   </button>
@@ -597,6 +605,20 @@ const app = Vue.createApp({
         this.error = e.message;  // an empty host, most likely
         await this.loadRules(ruleset, true);  // the file won, whatever it says
       }
+    },
+    async deleteRule(ruleset, index) {
+      const rule = ruleset.detail[index];
+      const what = rule.action + ' ' + rule.match + (rule.path || '');
+      if (!confirm('Delete the rule “' + what + '” from ' + ruleset.name + '?')) return;
+      this.error = '';
+      try {
+        await api('/api/rulesets/' + ruleset.file + '/rules?index=' + index,
+                  {method: 'DELETE'});
+      } catch (e) {
+        this.error = e.message;
+      }
+      // The state event reloads the rules; the ruleset's count moved too.
+      await this.loadPolicy();
     },
     async saveRules(file, indexes, enabled) {
       this.error = '';
