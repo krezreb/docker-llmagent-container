@@ -310,10 +310,13 @@ if [[ -n "$proxy" ]]; then
     docker compose -p dev-agent -f "$proxy_compose" up -d ||
         die "could not start the proxy; refusing to run without it"
 
-    # First run only: the proxy generates the CA as it starts.
-    for _ in $(seq 30); do
+    # First run only: the proxy generates the CA as it starts, which takes
+    # about two seconds. Polled tenth of a second rather than by the second so
+    # that a cold start is not rounded up to the next whole one; same 30s
+    # budget, 300 turns of it.
+    for _ in $(seq 300); do
         [[ -f "$proxy_state/agent-ca/ca.crt" ]] && break
-        sleep 1
+        sleep 0.1
     done
 
     [[ -f "$proxy_state/agent-ca/ca.crt" ]] ||
