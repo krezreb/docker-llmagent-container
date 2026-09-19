@@ -117,6 +117,25 @@ rules:
     assert p.decide("registry.npmjs.org", None)[0] == "allow"
 
 
+def test_several_paths_on_one_rule():
+    p = Policy(
+        state(
+            {
+                "r.yml": """
+name: r
+rules:
+  - {match: h.example.com, path: "/a/* /b/*", action: deny, note: two}
+  - {match: h.example.com, action: allow, note: rest}
+"""
+            }
+        )
+    )
+    assert p.decide("h.example.com", "/a/x")[0] == "deny"
+    assert p.decide("h.example.com", "/b/x")[0] == "deny"
+    assert p.decide("h.example.com", "/c/x")[0] == "allow"
+    assert p.decide("h.example.com", None)[0] == "allow"
+
+
 def test_modes():
     files = {"r.yml": DENY_ONE}
     assert Policy(state(files, mode="lockdown")).decide("github.com", "/")[0] == "deny"
