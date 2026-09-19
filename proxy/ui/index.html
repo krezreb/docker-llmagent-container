@@ -204,7 +204,7 @@
       <table>
         <tbody>
         <tr><th>time</th><th>client</th><th>request</th><th>cat</th>
-            <th>status</th><th>decision</th><th>ms</th></tr>
+            <th>status</th><th>decision</th><th>ms</th><th style="width:1%"></th></tr>
         <template v-for="rec in shown" :key="rec.id">
           <tr class="clickable" @click="open = open === rec.id ? null : rec.id">
             <td class="mono dim">{{ rec.ts.slice(11, 23) }}</td>
@@ -221,8 +221,34 @@
             <td class="mono dim">
               {{ rec.ms }}<span v-if="rec.held_ms"> (+{{ rec.held_ms }} held)</span>
             </td>
+            <td style="width:1%">
+              <!-- Offered only where no ruleset decided this: it went through on
+                   the mode, or on a one-off answer in the pending pane, so there
+                   is nothing covering it to go and edit. -->
+              <button v-if="rec.host && !covered(rec)" class="plain"
+                      title="save this as a rule"
+                      @click.stop="open = rec.id">+rule</button>
+            </td>
           </tr>
-          <tr v-if="open === rec.id"><td colspan="7"><pre>{{ pretty(rec) }}</pre></td></tr>
+          <tr v-if="open === rec.id">
+            <td colspan="8">
+              <div v-if="rec.host && !covered(rec)" class="row" style="margin-bottom:.5rem">
+                <span class="dim">save as</span>
+                <button class="primary" @click="addRuleFromLog(rec, 'allow')">allow</button>
+                <button class="danger" @click="addRuleFromLog(rec, 'deny')">deny</button>
+                <select v-model="logRule.scope">
+                  <option value="host">host</option>
+                  <option value="host+path">host+path</option>
+                </select>
+                <span class="dim">in</span>
+                <select v-model="logRule.saveTo">
+                  <option v-for="r in rulesets" :key="r.file" :value="r.file">{{ r.name }}</option>
+                </select>
+                <span class="deny" v-if="error">{{ error }}</span>
+              </div>
+              <pre>{{ pretty(rec) }}</pre>
+            </td>
+          </tr>
         </template>
         </tbody>
       </table>
@@ -411,6 +437,9 @@ const app = Vue.createApp({
     fetchedAt: Date.now(), now: Date.now(), newRuleset: '', error: '',
     paint: null,
     filter: {host: '', cat: '', decision: ''},
+    // Where a rule saved from a log row goes, and how wide it is; one choice
+    // for the pane, because one row is open at a time.
+    logRule: {scope: 'host', saveTo: ''},
     // Purging is not undoable: it rewrites the log on disk as well as the
     // ring, so everything but the age buttons asks first.
     purges: [
@@ -459,6 +488,9 @@ const app = Vue.createApp({
                   detail: was.detail, draft: was.draft},
           r);
       });
+      if (!this.rulesets.some(r => r.file === this.logRule.saveTo)) {
+        this.logRule.saveTo = this.rulesets[0]?.file;
+      }
       await Promise.all(this.rulesets.filter(r => r.open).map(r => this.loadRules(r)));
     },
     async loadRules(ruleset, force) {
@@ -510,6 +542,33 @@ const app = Vue.createApp({
       return Math.round((entry.waiting_ms + this.now - this.fetchedAt) / 1000);
     },
     pretty(record) { return JSON.stringify(record, null, 2); },
+
+    // A rule label is `<file>:<note>` when a ruleset decided the request, and
+    // `mode:`, `pending:` or `error:` when none did — the latter is the row
+    // worth turning into a rule after the fact: allowed once, or waved through
+    // by log-only or default-allow.
+    covered(record) {
+      return !!record.rule && !/^(mode|pending|error):/.test(record.rule);
+    },
+    async addRuleFromLog(record, action) {
+      // The same shape the pending pane saves under host+path: the directory
+      // the request was in and everything under it, without its query string.
+      const path = this.logRule.scope === 'host+path' && record.path
+        ? record.path.split('?')[0].replace(/[^/]*$/, '') + '*' : null;
+      this.error = '';
+      try {
+        await api('/api/rulesets/' + this.logRule.saveTo + '/rules', {
+          method: 'POST', headers: {'content-type': 'application/json'},
+          body: JSON.stringify({rules: [
+            {match: record.host, action, path, note: 'saved from the log'},
+          ]}),
+        });
+        this.open = null;
+      } catch (e) {
+        this.error = e.message;  // no ruleset to save into, most likely
+      }
+      await this.loadPolicy();  // the rule count moved
+    },
 
     async setMode(mode) {
       await put('/api/mode', {mode});
