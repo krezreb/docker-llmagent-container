@@ -350,7 +350,22 @@ DEV_AGENT_IMAGE=dev-agent:rust dev-agent claude .
 
 `make images` builds every `images/*.Dockerfile`. Each variant depends on the base, so
 a base change is picked up automatically. Name a variant anything except an existing
-make target (`install`, `build-image`, `images`, `aliases`).
+make target (`install`, `build-image`, `images`, `aliases`, `autobuild-schedule`).
+
+`make autobuild-schedule` keeps those images current without you remembering to. It
+installs a `dev-agent-autobuild` systemd user service that runs `make images` in this
+checkout, and dev-agent starts it in the background on the first run of each day, so a
+new release of an agent is picked up while you work rather than the next time you think
+of it. The build is a normal cached docker build: nothing to do usually costs seconds.
+
+```sh
+make autobuild-schedule
+journalctl --user -fu dev-agent-autobuild   # watch a rebuild
+```
+
+Re-run `make install` afterwards if your `dev-agent` predates this, since the script is
+what starts the service. `DEV_AGENT_NO_AUTOBUILD=1` skips the check for one run, and
+removing `~/.config/systemd/user/dev-agent-autobuild.service` turns it off for good.
 
 `make aliases` saves typing `DEV_AGENT_IMAGE=` by hand — it writes one alias per
 variant to `~/.bashrc`:
