@@ -334,7 +334,7 @@
                 </td>
                 <td style="width:25%">
                   <input class="cell mono dim" v-model="rule.path"
-                         placeholder="/any/path/*"
+                         placeholder="/any/path/* /or/another/*"
                          @change="saveField(r, i, 'path')"
                          @keyup.enter="$event.target.blur()">
                 </td>
@@ -367,7 +367,7 @@
                          @input="growDraft(r)">
                 </td>
                 <td>
-                  <input v-model="d.path" size="16" placeholder="/any/path/*">
+                  <input v-model="d.path" size="16" placeholder="/any/path/* /or/another/*">
                 </td>
                 <td>
                   <input v-model="d.note" size="26" placeholder="what it is for">

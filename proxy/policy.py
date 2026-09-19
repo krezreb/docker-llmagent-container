@@ -50,11 +50,12 @@ def match_host(pattern: str, host: str) -> bool:
 
 
 def match_path(pattern: str, path: str | None) -> bool:
+    """Space-separated globs, first match wins — one rule, several paths."""
     # A rule carrying a path cannot match a request whose path is unknown —
     # a tunnelled connection, or a CONNECT. SPEC section 8.2.
     if path is None:
         return False
-    return fnmatch.fnmatchcase(path, pattern)
+    return any(fnmatch.fnmatchcase(path, p) for p in pattern.split())
 
 
 @dataclass
