@@ -18,7 +18,7 @@ CODEX_VERSION ?= $(or $(call npm_latest,@openai%2fcodex),latest)
 # 'make build-image DOCKER_BUILD_FLAGS=--no-cache' rebuilds everything.
 DOCKER_BUILD_FLAGS ?=
 
-.PHONY: install build-image images aliases $(VARIANTS)
+.PHONY: install build-image images aliases autobuild-schedule $(VARIANTS)
 
 install: build-image
 	install -Dm755 dev-agent ~/.local/bin/dev-agent
@@ -34,6 +34,29 @@ images: $(VARIANTS)
 
 $(VARIANTS): %: build-image
 	docker build $(DOCKER_BUILD_FLAGS) -t dev-agent:$@ -f images/$@.Dockerfile .
+
+# A user service that rebuilds every image, started by dev-agent on its first
+# run of the day (see the autobuild block in the script). A unit rather than a
+# background job so the build survives closing the terminal and its output ends
+# up in 'journalctl --user -u dev-agent-autobuild'.
+UNIT_DIR ?= $(HOME)/.config/systemd/user
+MAKE_BIN := $(shell command -v $(MAKE))
+
+autobuild-schedule:
+	@install -d '$(UNIT_DIR)'
+	@printf '%s\n' \
+	    '[Unit]' \
+	    'Description=Rebuild dev-agent images' \
+	    '' \
+	    '[Service]' \
+	    'Type=oneshot' \
+	    'WorkingDirectory=$(CURDIR)' \
+	    'ExecStart=$(MAKE_BIN) images' \
+	    'TimeoutStartSec=infinity' \
+	    > '$(UNIT_DIR)/dev-agent-autobuild.service'
+	systemctl --user daemon-reload
+	@echo "installed $(UNIT_DIR)/dev-agent-autobuild.service"
+	@echo "dev-agent starts it once a day; follow it with 'journalctl --user -fu dev-agent-autobuild'"
 
 # One "dev-agent-<variant>" alias per images/*.Dockerfile, written to $(BASHRC)
 # between markers so re-running replaces the block instead of appending again.

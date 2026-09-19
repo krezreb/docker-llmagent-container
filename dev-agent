@@ -259,6 +259,23 @@ mkdir -p "$agent_home"
 chmod 700 "$agent_home"
 
 #
+# Daily image rebuild, in the background, on the first run of the day.
+#
+# Does nothing until 'make autobuild-schedule' has installed the user service;
+# the stamp is touched either way, so a host without it is not asked once per
+# run. The stamp is also touched before the build rather than after it, so a
+# build that fails waits for tomorrow instead of retrying on every run - the
+# journal of the unit says why.
+#
+autobuild_stamp="${XDG_STATE_HOME:-$HOME/.local/state}/dev-agent/autobuild"
+if [[ -z "${DEV_AGENT_NO_AUTOBUILD:-}" &&
+      -z "$(find "$autobuild_stamp" -newermt today 2>/dev/null)" ]]; then
+    mkdir -p "$(dirname "$autobuild_stamp")"
+    touch "$autobuild_stamp"
+    systemctl --user start --no-block dev-agent-autobuild.service 2>/dev/null || true
+fi
+
+#
 # Egress proxy.
 #
 # The container is attached to a docker network created with 'internal: true',
