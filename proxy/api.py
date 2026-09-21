@@ -306,6 +306,10 @@ class Index(tornado.web.RequestHandler):
         index = os.path.join(UI_DIR, "index.html")
         if os.path.exists(index):
             self.set_header("Content-Type", "text/html; charset=utf-8")
+            # The UI is baked into the image, so it only ever changes when the
+            # image is rebuilt — and a tab held open by the event stream would
+            # otherwise keep serving the UI from before that rebuild.
+            self.set_header("Cache-Control", "no-store")
             self.write(open(index, "rb").read())
             return
         self.set_header("Content-Type", "text/plain; charset=utf-8")
