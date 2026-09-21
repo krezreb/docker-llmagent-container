@@ -158,10 +158,10 @@
         disconnected (connecting<span class="ellipsis">...</span>)
       </template>
     </span>
-    <!-- Connections, not containers: an agent that is idle holds nothing open
-         and is not counted. The names are on the hover. -->
-    <span class="dim" :title="agents.join(', ') || 'nothing connected'">
-      {{ agents.length }} agent{{ agents.length === 1 ? '' : 's' }} connected
+    <!-- Containers, not connections: an agent heartbeats while it is up, so
+         one that is only thinking still counts. The names are on the hover. -->
+    <span class="dim" :title="agents.join(', ') || 'no agent is up'">
+      {{ agents.length }} agent{{ agents.length === 1 ? '' : 's' }} up
     </span>
     <span class="row">
       <button class="danger" @click="power('shutdown')">Shutdown</button>

@@ -731,7 +731,8 @@ switched off its own sandbox with one HTTP call.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/policy` | Mode, enabled rulesets, effective allow and deny lists. Also served read-only on `8098`; the endpoint the agent's skill uses. |
-| `GET` | `/api/events` | SSE. Events: `request` (a log record), `pending` (a new held request), `resolved` (a held request decided), `state` (mode or rulesets changed), `purge` (records cleared, with the cutoff so every open UI trims the same rows), `agents` (the containers holding a connection, sent on every connect and disconnect and once when the stream opens). |
+| `GET` | `/api/events` | SSE. Events: `request` (a log record), `pending` (a new held request), `resolved` (a held request decided), `state` (mode or rulesets changed), `purge` (records cleared, with the cutoff so every open UI trims the same rows), `agents` (the agent containers that are up, sent whenever that list changes and once when the stream opens). |
+| `POST` | `/api/heartbeat` | An agent container saying it is up. Body ignored; the name recorded is the reverse lookup of the caller's own address, so a container can register itself and nothing else. The one write served on `8098`. |
 | `GET` | `/api/log?since=&host=&cat=&decision=` | Recent records from the ring buffer (5000 entries). |
 | `POST` | `/api/shutdown` | Stop the proxy; see 11.4. Operator only. |
 | `POST` | `/api/restart` | Restart the proxy; see 11.4. Operator only. |
@@ -756,6 +757,31 @@ Three endpoints, and nothing else:
 This is what port `8098` serves, and it is what the agent's skill (section 13) is
 pointed at. Everything else on `8098` is `404`. The agent may see the policy; it may
 never change it.
+
+`POST /api/heartbeat` is the one exception, and it is one because it cannot be
+misused: it carries no body the proxy reads, and the name it registers is the
+reverse lookup of the connection's own source address. An agent can say "I am
+here" about itself, at whatever rate it likes, and can neither say it about
+another container nor remove one. What it costs if abused is a name in a
+header count until it goes stale.
+
+### 11.2.1 The roster
+
+The UI's agent count is containers, not connections. Connections are the wrong
+measure: an agent that is thinking, or waiting on the operator to answer a
+pending ask, holds nothing open and would vanish from the list.
+
+So each agent container posts to `/api/heartbeat` when it starts and every 60
+seconds after that, from the entrypoint of the image (`DEV_AGENT_HEARTBEAT`,
+set by `dev-agent --proxy`). The proxy keeps the last beat per name and treats
+an agent as up for 150 seconds — two missed beats and a margin. Nothing reports
+a killed container, so silence is the only thing that can remove one; a sweep
+every 5 seconds drops the stale entries and emits an `agents` event when the
+list changes.
+
+The roster is the union of that and the containers holding a live connection,
+which keeps a container that routes through the proxy without running this
+image's entrypoint visible too.
 
 ### 11.3 Why a subnet check, and not a loopback check
 

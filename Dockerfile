@@ -60,4 +60,24 @@ RUN mkdir -p /workspace
 ENV HOME=/home/agent
 WORKDIR /workspace
 
+# The proxy's UI lists the agents that are up, and it cannot see that from
+# traffic alone: an agent that is thinking, or waiting on a human, holds no
+# connection open and would drop off the list. So the container says so
+# itself, once at startup and once a minute after that.
+#
+# Backgrounded and never fatal: this is a status line, and an agent has to run
+# whether the proxy is reachable, unreachable, or not in use at all — without
+# DEV_AGENT_HEARTBEAT set (every run but --proxy) nothing is sent.
+COPY --chmod=755 <<'EOF' /usr/local/bin/dev-agent-entrypoint
+#!/bin/sh
+if [ -n "$DEV_AGENT_HEARTBEAT" ]; then
+    while :; do
+        curl -fsS -m 5 -X POST "$DEV_AGENT_HEARTBEAT" -o /dev/null 2>/dev/null
+        sleep 60
+    done &
+fi
+exec "$@"
+EOF
+
+ENTRYPOINT ["/usr/local/bin/dev-agent-entrypoint"]
 CMD ["/bin/bash"]

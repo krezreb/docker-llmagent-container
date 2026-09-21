@@ -98,6 +98,8 @@ class Ctx:
         self.policy = policy_mod.Policy(STATE, emit=self.log.event)
         self.trusted = None  # set in running(), once there is a route table
         self.clients: dict[str, str] = {}  # live connections, by mitmproxy id
+        self.agents: dict[str, float] = {}  # last heartbeat, by container name
+        self.roster: list[str] = []         # what the UIs were last told
 
 
 class EgressProxy:
@@ -114,6 +116,7 @@ class EgressProxy:
         self.ctx.trusted = api.trusted_subnet()
         api.serve(self.ctx)
         asyncio.get_running_loop().create_task(publish_ca())
+        asyncio.get_running_loop().create_task(api.sweep(self.ctx))
         warn(
             f"mode {self.policy.mode}; UI on :8099 (trusted peers: "
             f"{self.ctx.trusted or 'none, read-only'}), read-only API on :8098"
@@ -140,11 +143,11 @@ class EgressProxy:
             self.clients[client.id] = name[0].split(".")[0]
         except (OSError, socket.herror):
             pass
-        self.log.event("agents", api.agents(self.ctx))
+        api.publish(self.ctx)
 
     def client_disconnected(self, client):
         self.clients.pop(client.id, None)
-        self.log.event("agents", api.agents(self.ctx))
+        api.publish(self.ctx)
 
     def _client(self, conn) -> str:
         return self.clients.get(conn.id, conn.peername[0])

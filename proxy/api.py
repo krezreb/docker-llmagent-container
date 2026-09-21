@@ -14,6 +14,7 @@ import json
 import os
 import socket
 import struct
+import time
 
 import tornado.iostream
 import tornado.web
@@ -25,15 +26,49 @@ UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
 # GET-only, and all an agent container may ever see. SPEC section 11.2.
 READ_ONLY = ("/api/policy", "/api/mode", "/api/rulesets")
 
+# The one write an agent container is allowed, and it writes nothing an
+# operator reads as policy: the roster of who is up. Safe to open because the
+# name recorded comes from the reverse lookup of the caller's own address, not
+# from anything the caller sends — a container can register itself and nothing
+# else. SPEC section 11.2.
+HEARTBEAT = "/api/heartbeat"
+
+STALE = 150    # the entrypoint beats every 60s: two missed and a margin
+SWEEP = 5      # how often the roster is re-checked for staleness
+
 
 def agents(ctx) -> list[str]:
-    """The containers holding a connection to the proxy right now.
+    """The agent containers the proxy believes are up.
 
-    One name however many connections it has open, and a name only while it
-    is connected: an idle container is indistinguishable from a stopped one
-    from in here, so this counts conversations, not containers.
+    Two sources, because neither alone is the answer: the heartbeat, which an
+    idle container keeps sending, and the live connections, which cover a
+    container that routes through the proxy without running our entrypoint.
     """
-    return sorted(set(ctx.clients.values()))
+    fresh = time.monotonic() - STALE
+    return sorted(
+        {name for name, seen in ctx.agents.items() if seen > fresh}
+        | set(ctx.clients.values())
+    )
+
+
+def publish(ctx) -> None:
+    """Push the roster to the UIs, but only when it actually changed — the
+    sweep runs every few seconds and most of the time has nothing to say."""
+    roster = agents(ctx)
+    if roster != ctx.roster:
+        ctx.roster = roster
+        ctx.log.event("agents", roster)
+
+
+async def sweep(ctx) -> None:
+    """Expire agents that stopped beating. A container is killed rather than
+    asked to leave, so nothing but silence ever reports it gone."""
+    while True:
+        await asyncio.sleep(SWEEP)
+        fresh = time.monotonic() - STALE
+        for name in [n for n, seen in ctx.agents.items() if seen <= fresh]:
+            del ctx.agents[name]  # pruned, not just filtered: this dict lives
+        publish(ctx)              # as long as the proxy does
 
 
 def trusted_subnet() -> ipaddress.IPv4Network | None:
@@ -97,6 +132,8 @@ class Base(tornado.web.RequestHandler):
         if self.trusted:
             return
         if self.request.method == "GET" and self.request.path in READ_ONLY:
+            return
+        if self.request.method == "POST" and self.request.path == HEARTBEAT:
             return
         self.set_status(403)
         self.finish({"error": "read-only: this API is writable only from the host UI"})
@@ -313,6 +350,28 @@ class Events(Base):
             self.ctx.log.unsubscribe(queue)
 
 
+class Heartbeat(Base):
+    """An agent container saying it is still here.
+
+    The body is ignored: the name is the reverse lookup of the peer, the same
+    one the log labels its records with, so a container can only ever register
+    itself. Resolved off the loop, because gethostbyaddr blocks — one lookup a
+    minute per agent, on the listener agents can reach.
+    """
+
+    async def post(self):
+        ip = self.request.remote_ip
+        try:
+            name = (await asyncio.get_running_loop().run_in_executor(
+                None, socket.gethostbyaddr, ip
+            ))[0].split(".")[0]
+        except (OSError, socket.herror):
+            name = ip
+        self.ctx.agents[name] = time.monotonic()
+        publish(self.ctx)
+        self.write({"agent": name})
+
+
 class Power(Base):
     """Stop the proxy, or restart it.
 
@@ -365,6 +424,7 @@ class Index(tornado.web.RequestHandler):
             "  DELETE /api/rulesets/<file>/rules?index=0\n"
             "  GET  /api/pending       POST /api/pending/<key> {\"decision\": \"allow\"}\n"
             "  GET  /api/log           DELETE /api/log?seconds=3600\n"
+            "  POST /api/heartbeat     (from an agent container, every 60s)\n"
             "  GET  /api/events (SSE)\n"
             "  POST /api/shutdown      POST /api/restart\n"
         )
@@ -382,6 +442,7 @@ def serve(ctx) -> None:
             (r"/api/rulesets/([^/]+)/rules", Rules, args),
             (r"/api/pending", Pending, args),
             (r"/api/pending/([^/]+)", Pending, args),
+            (r"/api/heartbeat", Heartbeat, args),
             (r"/api/log", LogTail, args),
             (r"/api/events", Events, args),
             (r"/api/(shutdown|restart)", Power, args),
