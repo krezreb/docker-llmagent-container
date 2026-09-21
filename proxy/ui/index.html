@@ -1,6 +1,7 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>dev-agent proxy</title>
+<link rel="icon" href="data:,">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!--
   The web UI of SPEC section 12: three panes, no build step. Vue is the global
@@ -517,6 +518,14 @@ const app = Vue.createApp({
 
   computed: {
     hint() { return this.modes.find(m => m.value === (this.hover || this.mode))?.hint || ''; },
+    // The tab carries the same sign as the pill that is on, so a background
+    // window still says which mode is running — unless something is waiting
+    // on an answer, which outranks the mode.
+    favicon() {
+      return this.pending.length
+        ? '\ud83d\udfe1'
+        : this.modes.find(m => m.value === this.mode)?.icon || '';
+    },
     // Whatever the browser calls the viewer's zone: "CEST", "GMT+5:30", "PDT".
     tz() {
       return new Intl.DateTimeFormat([], {timeZoneName: 'short'})
@@ -531,6 +540,17 @@ const app = Vue.createApp({
         (!f.client || r.client === f.client) &&
         (!f.cat || r.cat === f.cat) &&
         (!f.decision || r.decision === f.decision));
+    },
+  },
+
+  watch: {
+    favicon: {
+      immediate: true,
+      handler(icon) {
+        document.querySelector('link[rel=icon]').href = 'data:image/svg+xml,' +
+          encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" ' +
+            'viewBox="0 0 32 32"><text y="26" font-size="28">' + icon + '</text></svg>');
+      },
     },
   },
 
