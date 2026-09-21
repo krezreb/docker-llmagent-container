@@ -13,6 +13,8 @@
     --bg: #fff; --fg: #1a1a1a; --dim: #6a6a6a; --line: #e0e0e0;
     --panel: #f7f7f7; --accent: #2d6cdf;
     --allow: #1a7f37; --deny: #c0392b; --tunnel: #8250df; --pending: #b26a00;
+    /* Resolved against whichever --accent the scheme below settles on. */
+    --hit: color-mix(in srgb, var(--accent) 20%, transparent);
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -107,19 +109,29 @@
   .cell:hover { background: var(--panel); }
   .cell:focus { background: var(--bg); outline: 1px solid var(--accent); }
   .cell::placeholder { color: var(--dim); opacity: .7; }
-  /* Where a jump from the log landed, kept until the next jump so the row is
-     still marked after the scroll settles. */
-  tr.hit > td { background: color-mix(in srgb, var(--accent) 20%, transparent); }
-  /* The same tint, once, for a panel that opens in place: nothing scrolls and
-     nothing moves, so without it a click can look like it did nothing. */
-  @keyframes flash {
-    from { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+  /* One tint for both places the eye has to be pulled to: the rule a jump from
+     the log landed on, and a save form that opened in place with nothing else
+     moving. Fade in over 300ms, three quick blinks, hold, then fade out three
+     seconds after the blinking stops — 4.2s end to end, which is where the
+     percentages below come from. */
+  @keyframes hit {
+    0%     { background: transparent; }          /* 0ms   */
+    7.1%   { background: var(--hit); }           /* 300ms, faded in */
+    9.5%   { background: transparent; }          /* 400ms, blink 1 */
+    11.9%  { background: var(--hit); }
+    14.3%  { background: transparent; }          /* 600ms, blink 2 */
+    16.7%  { background: var(--hit); }
+    19%    { background: transparent; }          /* 800ms, blink 3 */
+    21.4%  { background: var(--hit); }           /* 900ms, held from here */
+    92.9%  { background: var(--hit); }           /* 3900ms */
+    100%   { background: transparent; }          /* 4200ms */
   }
-  .flash { animation: flash 1s ease-out; border-radius: 4px; }
+  tr.hit > td, .flash { animation: hit 4.2s ease-out; }
+  .flash { border-radius: 4px; }
   @media (prefers-reduced-motion: reduce) {
-    /* Held rather than faded; the class is taken off on a timer either way. */
-    .flash { animation: none;
-             background: color-mix(in srgb, var(--accent) 20%, transparent); }
+    /* No blinking: the tint is simply held, and taken off by the same timer
+       that takes the class off after the animation would have ended. */
+    tr.hit > td, .flash { animation: none; background: var(--hit); }
   }
   .save { display: inline-flex; gap: .4rem; align-items: center; padding: .2rem .5rem;
           border: 1px dashed var(--line); border-radius: 6px; }
@@ -437,6 +449,8 @@
 
 <script src="vue.global.prod.js"></script>
 <script>
+const HIT_MS = 4200;   // the length of the `hit` animation: the class comes off
+                       // when it ends, so a second click plays it again.
 const LOG_MAX = 2000;  // the server's ring is 5000; this is one screen's worth
                        // of scrollback, kept small so the page stays quick.
 
@@ -616,12 +630,14 @@ const app = Vue.createApp({
     },
     openAndFlash(record) {
       this.open = record.id;
-      this.flash = record.id;
-      // Taken off once the tint has run, so that opening the next row — or
-      // this one again — plays it rather than finding the class already on.
+      // Off and on across a tick: an animation does not restart while its
+      // class is already on the element, so clicking the same row twice would
+      // otherwise tint it once.
+      this.flash = null;
+      this.$nextTick(() => { this.flash = record.id; });
       setTimeout(() => {
         if (this.flash === record.id) this.flash = null;
-      }, 1000);
+      }, HIT_MS);
     },
     async jumpToRule(record) {
       const hit = this.matched(record);
@@ -638,10 +654,19 @@ const app = Vue.createApp({
       );
       // A rule edited or deleted since the request was logged is no longer
       // findable; the ruleset it was in is still worth scrolling to.
+      // Cleared first for the same reason openAndFlash clears it: the tint
+      // only plays on a class that was not already there.
+      this.highlight = {file: '', index: -1};
+      await this.$nextTick();
       this.highlight = {file: hit.file, index};
       await this.$nextTick();
       const id = index < 0 ? 'ruleset-' + hit.file : 'rule-' + hit.file + '-' + index;
       document.getElementById(id)?.scrollIntoView({block: 'center', behavior: 'smooth'});
+      setTimeout(() => {
+        if (this.highlight.file === hit.file && this.highlight.index === index) {
+          this.highlight = {file: '', index: -1};
+        }
+      }, HIT_MS);
     },
     async addRuleFromLog(record, action) {
       // The same shape the pending pane saves under host+path: the directory
