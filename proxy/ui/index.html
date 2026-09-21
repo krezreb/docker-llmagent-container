@@ -30,7 +30,8 @@
   }
   header {
     display: flex; flex-wrap: wrap; gap: 1rem; align-items: baseline;
-    padding: .7rem 1rem; border-bottom: 1px solid var(--line);
+    justify-content: center; padding: .7rem 1rem;
+    border-bottom: 1px solid var(--line);
     position: sticky; top: 0; background: var(--bg); z-index: 2;
   }
   h1 { font-size: 1rem; margin: 0; font-weight: 600; }
@@ -90,7 +91,8 @@
           font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji",
                        system-ui, sans-serif; }
   /* Full-width row of the wrapping header, so the hint sits under the pills. */
-  .hint { flex-basis: 100%; margin: -.3rem 0 0; color: var(--dim); font-size: .85rem; }
+  .hint { flex-basis: 100%; margin: -.3rem 0 0; color: var(--dim); font-size: .85rem;
+          text-align: center; }
   .rules { margin: .4rem 0 0; }
   .plain { border: 0; background: transparent; padding: .1rem .3rem .1rem 0;
            font: inherit; color: inherit; }
