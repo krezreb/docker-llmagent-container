@@ -494,7 +494,7 @@ const app = Vue.createApp({
       {value: 'log-only', icon: '\ud83d\udd2d', label: 'Log-only',
        hint: 'Allow all traffic, even if in deny rules.'},
     ],
-    hover: '',
+    hover: '', blink: false,
     mode: '', rulesets: [], pending: [], log: [], open: null, connected: false,
     agents: [],
     fetchedAt: Date.now(), now: Date.now(), newRuleset: '', error: '',
@@ -520,11 +520,11 @@ const app = Vue.createApp({
     hint() { return this.modes.find(m => m.value === (this.hover || this.mode))?.hint || ''; },
     // The tab carries the same sign as the pill that is on, so a background
     // window still says which mode is running — unless something is waiting
-    // on an answer, which outranks the mode.
+    // on an answer, in which case a yellow dot blinks over it: a still icon
+    // in a background tab is easy to miss, a flashing one is not.
     favicon() {
-      return this.pending.length
-        ? '\ud83d\udfe1'
-        : this.modes.find(m => m.value === this.mode)?.icon || '';
+      const icon = this.modes.find(m => m.value === this.mode)?.icon || '';
+      return this.pending.length && this.blink ? '\ud83d\udfe1' : icon;
     },
     // Whatever the browser calls the viewer's zone: "CEST", "GMT+5:30", "PDT".
     tz() {
@@ -562,6 +562,9 @@ const app = Vue.createApp({
     window.addEventListener('mouseup', () => this.paintEnd());
     // Only the displayed age ticks; the entries themselves arrive over SSE.
     setInterval(() => { this.now = Date.now(); }, 1000);
+    // The blink of the pending favicon. Left alone when nothing is pending,
+    // so an idle page redraws nothing twice a second.
+    setInterval(() => { if (this.pending.length) this.blink = !this.blink; }, 500);
   },
 
   methods: {
