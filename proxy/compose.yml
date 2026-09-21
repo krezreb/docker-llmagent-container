@@ -4,7 +4,11 @@ services:
   proxy:
     image: dev-agent-proxy  # built by proxy/Makefile; no build: here, see 5.1
     container_name: dev-agent-proxy
-    restart: unless-stopped
+    # on-failure rather than unless-stopped: it is what lets the UI's Shutdown
+    # and Restart buttons work without a docker socket in here. The addon exits
+    # 0 to stay down and 1 to come back, and a crash still comes back. A
+    # shut-down proxy is started again by the next 'dev-agent --proxy'.
+    restart: on-failure
     ports:
       - "127.0.0.1:8099:8099"
     volumes:

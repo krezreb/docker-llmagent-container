@@ -158,6 +158,10 @@
         disconnected (connecting<span class="ellipsis">...</span>)
       </template>
     </span>
+    <span class="row">
+      <button class="danger" @click="power('shutdown')">Shutdown</button>
+      <button @click="power('restart')">Restart</button>
+    </span>
     <!-- Hovering a pill explains the mode it would switch to; otherwise the
          line describes the mode that is on. -->
     <p class="hint">{{ hint }}</p>
@@ -558,6 +562,25 @@ const app = Vue.createApp({
       // anyway: what is on screen is then known to be wrong.
       if (!force && document.activeElement?.classList.contains('cell')) return;
       ruleset.detail = (await api('/api/rulesets/' + ruleset.file)).rules;
+    },
+    async power(what) {
+      if (what === 'shutdown' && !confirm(
+            'Shut the proxy down?\n\n'
+            + 'Every agent container routed through it loses internet access '
+            + 'until the proxy is started again \u2014 which the next '
+            + "'dev-agent --proxy' does.")) return;
+      // The proxy exits right after acking, so the stream drops and the header
+      // goes to 'disconnected (connecting...)' on its own. On a restart that
+      // is also the progress indicator, and it clears itself when the
+      // container is back.
+      try {
+        await api('/api/' + what, {method: 'POST'});
+        this.connected = false;
+      } catch (e) {
+        // The header has no slot for `error`, and a refused shutdown is not
+        // something to leave unsaid.
+        alert(e.message);
+      }
     },
     async loadLog() { this.log = (await api('/api/log')).log; },
     async purge(choice) {

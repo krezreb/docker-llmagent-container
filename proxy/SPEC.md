@@ -142,7 +142,7 @@ traffic. An agent can still talk to itself.
 ```
 
 One long-lived proxy container serves every agent session on the host, and it is not
-a per-session sidecar: a shared, `restart: unless-stopped` proxy is up before the
+a per-session sidecar: a shared, `restart: on-failure` proxy is up before the
 first session and stays up after the last, so nothing has to start it in the hot
 path or stop it afterwards.
 
@@ -194,7 +194,7 @@ services:
   proxy:
     image: dev-agent-proxy  # built by proxy/Makefile; no build: here, see above
     container_name: dev-agent-proxy
-    restart: unless-stopped
+    restart: on-failure     # see 11.4: the exit status is the power switch
     ports:
       - "127.0.0.1:8099:8099"
     volumes:
@@ -733,6 +733,8 @@ switched off its own sandbox with one HTTP call.
 | `GET` | `/api/policy` | Mode, enabled rulesets, effective allow and deny lists. Also served read-only on `8098`; the endpoint the agent's skill uses. |
 | `GET` | `/api/events` | SSE. Events: `request` (a log record), `pending` (a new held request), `resolved` (a held request decided), `state` (mode or rulesets changed), `purge` (records cleared, with the cutoff so every open UI trims the same rows). |
 | `GET` | `/api/log?since=&host=&cat=&decision=` | Recent records from the ring buffer (5000 entries). |
+| `POST` | `/api/shutdown` | Stop the proxy; see 11.4. Operator only. |
+| `POST` | `/api/restart` | Restart the proxy; see 11.4. Operator only. |
 | `DELETE` | `/api/log?seconds=` | Purge records older than `seconds`, or all of them when it is absent or `0`. Clears the ring and rewrites `/state/log.jsonl`, so a restart does not bring back what was cleared. The age is resolved against the proxy's clock, not the UI's. Operator only, like every other write. |
 | `GET` | `/api/mode` | Current mode. |
 | `PUT` | `/api/mode` | `{"mode": "..."}`. |
@@ -814,6 +816,23 @@ The two mechanisms are deliberately redundant. Port `8098` means the agent's
 documented path never touches code that can mutate anything; the subnet guard on
 `8099` is the backstop for the undocumented path.
 
+### 11.4 Shutdown and restart, without a docker socket
+
+`POST /api/shutdown` and `POST /api/restart` stop and restart the container from
+the UI. Neither speaks to docker. The addon exits, and the container's
+`restart: on-failure` policy reads the status: `0` and it stays down, non-zero
+and docker brings it back. A crash is still non-zero, so crash recovery is
+unchanged, and the next `dev-agent --proxy` starts a shut-down proxy again
+because it always runs `compose up -d`.
+
+The alternative was mounting `/var/run/docker.sock`, which would hand root over
+the host's docker to the one container every agent can reach. Two lines of exit
+status are cheaper than that.
+
+Shutting the proxy down cuts egress for every agent routed through it, so the UI
+gates it behind a confirmation that says so. Restart does not ask: the gap is
+seconds, and the network attachments survive it.
+
 ## 12. Web UI
 
 Vue 3, one page, three panes.
@@ -831,6 +850,12 @@ Vue 3, one page, three panes.
   — it is the one part of the UI someone is actually waiting on.
 - **Rulesets and mode.** The mode as four radio options, each ruleset as a toggle
   with its description and rule count, expandable to show the rules.
+
+The header carries the mode pills, the live indicator, and **Shutdown** and
+**Restart** (section 11.4). Shutdown confirms first, saying that every agent
+loses internet access; restart does not. Both drop the event stream, so the
+indicator goes to *disconnected (connecting...)* by itself and, on a restart,
+back to *live* when the container returns.
 
 No build step. The Vue 3 global build is vendored into the image as
 `ui/vue.global.prod.js` and loaded by one `index.html`; components are plain

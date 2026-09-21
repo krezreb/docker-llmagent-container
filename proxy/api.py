@@ -299,6 +299,28 @@ class Events(Base):
             self.ctx.log.unsubscribe(queue)
 
 
+class Power(Base):
+    """Stop the proxy, or restart it.
+
+    Nothing here talks to docker: the container's own restart policy is
+    on-failure, so the exit status decides which of the two happens. 0 and the
+    container stays down until the next 'dev-agent --proxy' brings it back; 1
+    and docker starts it again. That keeps the docker socket out of a container
+    whose whole job is to be the one thing the agents can reach.
+
+    The reply is flushed before the exit, so the UI hears the ack rather than a
+    dropped connection.
+    """
+
+    async def post(self, what):
+        warn(f"{what} asked for by {self.request.remote_ip}")
+        self.write({what: True})
+        await self.flush()
+        asyncio.get_running_loop().call_later(
+            0.1, os._exit, 0 if what == "shutdown" else 1
+        )
+
+
 class Index(tornado.web.RequestHandler):
     """The UI if it is installed in the image, else what to call instead."""
 
@@ -330,6 +352,7 @@ class Index(tornado.web.RequestHandler):
             "  GET  /api/pending       POST /api/pending/<key> {\"decision\": \"allow\"}\n"
             "  GET  /api/log           DELETE /api/log?seconds=3600\n"
             "  GET  /api/events (SSE)\n"
+            "  POST /api/shutdown      POST /api/restart\n"
         )
 
 
@@ -347,6 +370,7 @@ def serve(ctx) -> None:
             (r"/api/pending/([^/]+)", Pending, args),
             (r"/api/log", LogTail, args),
             (r"/api/events", Events, args),
+            (r"/api/(shutdown|restart)", Power, args),
         ]
         if full:
             routes += [
