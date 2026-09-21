@@ -239,11 +239,11 @@
       </div>
       <table>
         <tbody>
-        <tr><th>time</th><th>client</th><th>request</th><th>cat</th>
+        <tr><th>time (utc)</th><th>agent</th><th>request</th><th>cat</th>
             <th>status</th><th>decision</th><th>ms</th><th style="width:1%"></th></tr>
         <template v-for="rec in shown" :key="rec.id">
           <tr class="clickable" @click="open = open === rec.id ? null : rec.id">
-            <td class="mono dim">{{ rec.ts.slice(11, 23) }}</td>
+            <td class="mono dim">{{ rec.ts.slice(11, 19) }}</td>
             <td class="mono">{{ rec.client }}</td>
             <td class="mono truncate">
               {{ rec.method || 'CONNECT' }} {{ rec.host }}{{ rec.path || '' }}
