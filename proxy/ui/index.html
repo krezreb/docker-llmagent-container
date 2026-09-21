@@ -107,6 +107,9 @@
   .cell:hover { background: var(--panel); }
   .cell:focus { background: var(--bg); outline: 1px solid var(--accent); }
   .cell::placeholder { color: var(--dim); opacity: .7; }
+  /* Where a jump from the log landed, kept until the next jump so the row is
+     still marked after the scroll settles. */
+  tr.hit > td { background: color-mix(in srgb, var(--accent) 20%, transparent); }
   .save { display: inline-flex; gap: .4rem; align-items: center; padding: .2rem .5rem;
           border: 1px dashed var(--line); border-radius: 6px; }
 </style>
@@ -255,13 +258,15 @@
                    to save. The label carries both. -->
               <div v-else-if="matched(rec)" class="row" style="margin-bottom:.5rem">
                 <span :class="rec.decision">{{ rec.decision }}</span>
-                <span class="dim">by</span>
+                <span class="dim">via</span>
                 <span>“{{ matched(rec).rule }}”</span>
                 <span class="dim">in</span>
                 <span>{{ matched(rec).ruleset }}</span>
                 <!-- An unnamed ruleset is shown by its filename already. -->
                 <span class="dim mono" v-if="matched(rec).ruleset !== matched(rec).file">
                   {{ matched(rec).file }}</span>
+                <button class="plain" title="open this rule in the rulesets below"
+                        @click="jumpToRule(rec)">show rule</button>
               </div>
               <pre>{{ pretty(rec) }}</pre>
             </td>
@@ -276,7 +281,7 @@
       <h2>Rulesets</h2>
       <table>
         <tbody>
-        <tr v-for="r in rulesets" :key="r.file">
+        <tr v-for="r in rulesets" :key="r.file" :id="'ruleset-' + r.file">
           <td style="width:1%">
             <input type="checkbox" :checked="r.enabled" @change="toggle(r, $event)">
           </td>
@@ -331,7 +336,9 @@
                    text rather than toggling the row, and there is no editor to
                    open or dismiss. -->
               <tr v-for="(rule, i) in r.detail" :key="i" class="rule"
-                  :class="{off: !rule.enabled}">
+                  :id="'rule-' + r.file + '-' + i"
+                  :class="{off: !rule.enabled,
+                           hit: highlight.file === r.file && highlight.index === i}">
                 <td class="grab" style="width:1.6rem"
                     :title="'drag down the edge to turn a run ' + (rule.enabled ? 'off' : 'on')"
                     @mousedown.prevent="paintStart(r, i)" @mouseenter="paintOver(r, i)">
@@ -457,6 +464,8 @@ const app = Vue.createApp({
     // Where a rule saved from a log row goes, and how wide it is; one choice
     // for the pane, because one row is open at a time.
     logRule: {scope: 'host', saveTo: ''},
+    // The rule a jump from the log landed on, marked until the next jump.
+    highlight: {file: '', index: -1},
     // Purging is not undoable: it rewrites the log on disk as well as the
     // ring, so everything but the age buttons asks first.
     purges: [
@@ -591,6 +600,26 @@ const app = Vue.createApp({
         // show, so the filename stands in for it.
         ruleset: ruleset ? ruleset.name : file,
       };
+    },
+    async jumpToRule(record) {
+      const hit = this.matched(record);
+      const ruleset = hit && this.rulesets.find(r => r.file === hit.file);
+      if (!ruleset) return;
+      ruleset.open = true;
+      if (!ruleset.detail.length) await this.loadRules(ruleset);
+      // The label carries the rule's note, not its index, so the row is found
+      // by the text the label was built from, and by the action, which the
+      // decision matches. Two rules written the same way: the first one wins,
+      // which is also the one the policy would have matched.
+      const index = ruleset.detail.findIndex(
+        rule => (rule.note || rule.match) === hit.rule && rule.action === record.decision
+      );
+      // A rule edited or deleted since the request was logged is no longer
+      // findable; the ruleset it was in is still worth scrolling to.
+      this.highlight = {file: hit.file, index};
+      await this.$nextTick();
+      const id = index < 0 ? 'ruleset-' + hit.file : 'rule-' + hit.file + '-' + index;
+      document.getElementById(id)?.scrollIntoView({block: 'center', behavior: 'smooth'});
     },
     async addRuleFromLog(record, action) {
       // The same shape the pending pane saves under host+path: the directory
