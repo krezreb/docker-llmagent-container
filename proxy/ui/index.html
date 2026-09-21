@@ -111,22 +111,22 @@
   .cell::placeholder { color: var(--dim); opacity: .7; }
   /* One tint for both places the eye has to be pulled to: the rule a jump from
      the log landed on, and a save form that opened in place with nothing else
-     moving. Fade in over 300ms, three quick blinks, hold, then fade out three
-     seconds after the blinking stops — 4.2s end to end, which is where the
+     moving. Fade in over 100ms, three quick blinks, hold for three seconds,
+     then fade out over three more — 6.7s end to end, which is where the
      percentages below come from. */
   @keyframes hit {
-    0%     { background: transparent; }          /* 0ms   */
-    7.1%   { background: var(--hit); }           /* 300ms, faded in */
-    9.5%   { background: transparent; }          /* 400ms, blink 1 */
-    11.9%  { background: var(--hit); }
-    14.3%  { background: transparent; }          /* 600ms, blink 2 */
-    16.7%  { background: var(--hit); }
-    19%    { background: transparent; }          /* 800ms, blink 3 */
-    21.4%  { background: var(--hit); }           /* 900ms, held from here */
-    92.9%  { background: var(--hit); }           /* 3900ms */
-    100%   { background: transparent; }          /* 4200ms */
+    0%      { background: transparent; }         /* 0ms    */
+    1.493%  { background: var(--hit); }          /* 100ms, faded in */
+    2.985%  { background: transparent; }         /* 200ms, blink 1 */
+    4.478%  { background: var(--hit); }
+    5.970%  { background: transparent; }         /* 400ms, blink 2 */
+    7.463%  { background: var(--hit); }
+    8.955%  { background: transparent; }         /* 600ms, blink 3 */
+    10.448% { background: var(--hit); }          /* 700ms, held from here */
+    55.224% { background: var(--hit); }          /* 3700ms, the fade begins */
+    100%    { background: transparent; }         /* 6700ms */
   }
-  tr.hit > td, .flash { animation: hit 4.2s ease-out; }
+  tr.hit > td, .flash { animation: hit 6.7s ease-out; }
   .flash { border-radius: 4px; }
   @media (prefers-reduced-motion: reduce) {
     /* No blinking: the tint is simply held, and taken off by the same timer
@@ -449,7 +449,7 @@
 
 <script src="vue.global.prod.js"></script>
 <script>
-const HIT_MS = 4200;   // the length of the `hit` animation: the class comes off
+const HIT_MS = 6700;   // the length of the `hit` animation: the class comes off
                        // when it ends, so a second click plays it again.
 const LOG_MAX = 2000;  // the server's ring is 5000; this is one screen's worth
                        // of scrollback, kept small so the page stays quick.
