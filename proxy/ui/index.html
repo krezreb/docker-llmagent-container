@@ -187,6 +187,10 @@
       <h2>Live log</h2>
       <div class="row" style="margin-bottom:.5rem">
         <input v-model="filter.host" placeholder="host contains">
+        <select v-model="filter.client">
+          <option value="">every agent</option>
+          <option v-for="c in clients" :key="c" :value="c">{{ c }}</option>
+        </select>
         <select v-model="filter.cat">
           <option value="">every category</option>
           <option v-for="c in cats" :key="c" :value="c">{{ c }}</option>
@@ -436,7 +440,7 @@ const app = Vue.createApp({
     mode: '', rulesets: [], pending: [], log: [], open: null, connected: false,
     fetchedAt: Date.now(), now: Date.now(), newRuleset: '', error: '',
     paint: null,
-    filter: {host: '', cat: '', decision: ''},
+    filter: {host: '', client: '', cat: '', decision: ''},
     // Where a rule saved from a log row goes, and how wide it is; one choice
     // for the pane, because one row is open at a time.
     logRule: {scope: 'host', saveTo: ''},
@@ -453,10 +457,12 @@ const app = Vue.createApp({
   computed: {
     hint() { return this.modes.find(m => m.value === (this.hover || this.mode))?.hint || ''; },
     cats() { return [...new Set(this.log.map(r => r.cat).filter(Boolean))].sort(); },
+    clients() { return [...new Set(this.log.map(r => r.client).filter(Boolean))].sort(); },
     shown() {
       const f = this.filter;
       return this.log.filter(r =>
         (!f.host || (r.host || '').includes(f.host)) &&
+        (!f.client || r.client === f.client) &&
         (!f.cat || r.cat === f.cat) &&
         (!f.decision || r.decision === f.decision));
     },
