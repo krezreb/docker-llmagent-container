@@ -33,22 +33,20 @@ READ_ONLY = ("/api/policy", "/api/mode", "/api/rulesets")
 # else. SPEC section 11.2.
 HEARTBEAT = "/api/heartbeat"
 
-STALE = 150    # the entrypoint beats every 60s: two missed and a margin
+STALE = 15     # the entrypoint beats every 5s: two missed and a margin
 SWEEP = 5      # how often the roster is re-checked for staleness
 
 
 def agents(ctx) -> list[str]:
     """The agent containers the proxy believes are up.
 
-    Two sources, because neither alone is the answer: the heartbeat, which an
-    idle container keeps sending, and the live connections, which cover a
-    container that routes through the proxy without running our entrypoint.
+    The heartbeat alone. Live connections are not consulted: they answer a
+    different question — who is fetching — and an agent that is thinking makes
+    none. A container that routes through the proxy without running this
+    image's entrypoint is not listed here; the log is where it shows up.
     """
     fresh = time.monotonic() - STALE
-    return sorted(
-        {name for name, seen in ctx.agents.items() if seen > fresh}
-        | set(ctx.clients.values())
-    )
+    return sorted(name for name, seen in ctx.agents.items() if seen > fresh)
 
 
 def publish(ctx) -> None:

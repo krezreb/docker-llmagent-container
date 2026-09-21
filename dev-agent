@@ -381,7 +381,7 @@ if [[ -n "$proxy" ]]; then
         --env "NO_PROXY=localhost,127.0.0.1,dev-agent-proxy"
         --env "no_proxy=localhost,127.0.0.1,dev-agent-proxy"
 
-        # The entrypoint posts here every minute so the UI can list this
+        # The entrypoint posts here every few seconds so the UI can list this
         # container for as long as it is up, rather than only while it is
         # fetching something. The read-only listener, which is the only one an
         # agent network can reach, and no_proxy covers the hostname.

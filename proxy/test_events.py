@@ -33,9 +33,6 @@ class Ctx:
 
     def __init__(self) -> None:
         self.log = Log(path=os.path.join(tempfile.mkdtemp(), "log.jsonl"))
-        # Two connections from one container, one from another: what the
-        # header counts is containers.
-        self.clients = {"a": "agent-repo", "b": "agent-repo", "c": "agent-docs"}
         self.agents: dict[str, float] = {}  # last heartbeat, by container name
         self.roster: list[str] = []
 
@@ -88,13 +85,13 @@ async def main() -> None:
     assert elapsed < 5, elapsed
     assert chunks[0].startswith(b":"), chunks[0]
 
-    # The count is seeded on open: connects and disconnects only arrive as
-    # events, and a tab opened between two of them would show nothing.
+    # The roster is seeded on open: it only ever changes by event afterwards,
+    # and a tab opened between two of them would show nothing.
     for _ in range(50):
         if b"event: agents" in b"".join(chunks):
             break
         await asyncio.sleep(0.1)
-    assert b'event: agents\ndata: ["agent-docs", "agent-repo"]' in b"".join(chunks), chunks
+    assert b"event: agents\ndata: []" in b"".join(chunks), chunks
 
     # And an event that lands afterwards still arrives.
     await asyncio.sleep(0.1)
@@ -127,7 +124,7 @@ async def main() -> None:
         await asyncio.sleep(0.1)
         if beating not in roster(chunks):
             break
-    assert roster(chunks) == ["agent-docs", "agent-repo"], chunks
+    assert roster(chunks) == [], chunks
 
     # The heartbeat is the only write that listener takes.
     try:

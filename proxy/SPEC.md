@@ -771,17 +771,25 @@ The UI's agent count is containers, not connections. Connections are the wrong
 measure: an agent that is thinking, or waiting on the operator to answer a
 pending ask, holds nothing open and would vanish from the list.
 
-So each agent container posts to `/api/heartbeat` when it starts and every 60
+So each agent container posts to `/api/heartbeat` when it starts and every 5
 seconds after that, from the entrypoint of the image (`DEV_AGENT_HEARTBEAT`,
 set by `dev-agent --proxy`). The proxy keeps the last beat per name and treats
-an agent as up for 150 seconds — two missed beats and a margin. Nothing reports
+an agent as up for 15 seconds — two missed beats and a margin. Nothing reports
 a killed container, so silence is the only thing that can remove one; a sweep
 every 5 seconds drops the stale entries and emits an `agents` event when the
 list changes.
 
-The roster is the union of that and the containers holding a live connection,
-which keeps a container that routes through the proxy without running this
-image's entrypoint visible too.
+The interval is short because the loop is also the retry: a first beat that
+goes out before the container's network is ready is otherwise invisible until
+the next one, and an agent that is plainly running must not read as "0 agents
+up" while the operator watches. It costs one request and one reverse lookup
+per agent every five seconds, on a listener nothing else uses.
+
+The heartbeat is the only source. Live connections are deliberately not
+counted: they answer who is fetching, not who is up, which is the measure this
+replaced. A container that routes through the proxy without running this
+image's entrypoint therefore does not appear in the count — its requests still
+appear in the log, named as always.
 
 ### 11.3 Why a subnet check, and not a loopback check
 

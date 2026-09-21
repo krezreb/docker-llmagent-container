@@ -63,7 +63,11 @@ WORKDIR /workspace
 # The proxy's UI lists the agents that are up, and it cannot see that from
 # traffic alone: an agent that is thinking, or waiting on a human, holds no
 # connection open and would drop off the list. So the container says so
-# itself, once at startup and once a minute after that.
+# itself, at startup and every five seconds after that.
+#
+# Five rather than a minute because the loop is also the retry: a first beat
+# sent before the network is ready would otherwise leave the UI reading "0
+# agents up" for a whole minute with an agent plainly running.
 #
 # Backgrounded and never fatal: this is a status line, and an agent has to run
 # whether the proxy is reachable, unreachable, or not in use at all — without
@@ -73,7 +77,7 @@ COPY --chmod=755 <<'EOF' /usr/local/bin/dev-agent-entrypoint
 if [ -n "$DEV_AGENT_HEARTBEAT" ]; then
     while :; do
         curl -fsS -m 5 -X POST "$DEV_AGENT_HEARTBEAT" -o /dev/null 2>/dev/null
-        sleep 60
+        sleep 5
     done &
 fi
 exec "$@"

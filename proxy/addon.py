@@ -97,7 +97,6 @@ class Ctx:
         self.log = Log(path=LOG_FILE)
         self.policy = policy_mod.Policy(STATE, emit=self.log.event)
         self.trusted = None  # set in running(), once there is a route table
-        self.clients: dict[str, str] = {}  # live connections, by mitmproxy id
         self.agents: dict[str, float] = {}  # last heartbeat, by container name
         self.roster: list[str] = []         # what the UIs were last told
 
@@ -108,7 +107,7 @@ class EgressProxy:
         self.ctx = Ctx()
         self.log = self.ctx.log
         self.policy = self.ctx.policy
-        self.clients = self.ctx.clients
+        self.clients: dict[str, str] = {}
 
     # -- lifecycle -------------------------------------------------------
 
@@ -143,11 +142,9 @@ class EgressProxy:
             self.clients[client.id] = name[0].split(".")[0]
         except (OSError, socket.herror):
             pass
-        api.publish(self.ctx)
 
     def client_disconnected(self, client):
         self.clients.pop(client.id, None)
-        api.publish(self.ctx)
 
     def _client(self, conn) -> str:
         return self.clients.get(conn.id, conn.peername[0])
