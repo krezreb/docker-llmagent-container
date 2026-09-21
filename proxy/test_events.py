@@ -31,6 +31,9 @@ class Ctx:
 
     def __init__(self) -> None:
         self.log = Log(path=os.path.join(tempfile.mkdtemp(), "log.jsonl"))
+        # Two connections from one container, one from another: what the
+        # header counts is containers.
+        self.clients = {"a": "agent-repo", "b": "agent-repo", "c": "agent-docs"}
 
 
 async def main() -> None:
@@ -60,6 +63,14 @@ async def main() -> None:
     elapsed = await asyncio.wait_for(opened, 5)
     assert elapsed < 5, elapsed
     assert chunks[0].startswith(b":"), chunks[0]
+
+    # The count is seeded on open: connects and disconnects only arrive as
+    # events, and a tab opened between two of them would show nothing.
+    for _ in range(50):
+        if b"event: agents" in b"".join(chunks):
+            break
+        await asyncio.sleep(0.1)
+    assert b'event: agents\ndata: ["agent-docs", "agent-repo"]' in b"".join(chunks), chunks
 
     # And an event that lands afterwards still arrives.
     await asyncio.sleep(0.1)

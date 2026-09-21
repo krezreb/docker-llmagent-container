@@ -731,7 +731,7 @@ switched off its own sandbox with one HTTP call.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/policy` | Mode, enabled rulesets, effective allow and deny lists. Also served read-only on `8098`; the endpoint the agent's skill uses. |
-| `GET` | `/api/events` | SSE. Events: `request` (a log record), `pending` (a new held request), `resolved` (a held request decided), `state` (mode or rulesets changed), `purge` (records cleared, with the cutoff so every open UI trims the same rows). |
+| `GET` | `/api/events` | SSE. Events: `request` (a log record), `pending` (a new held request), `resolved` (a held request decided), `state` (mode or rulesets changed), `purge` (records cleared, with the cutoff so every open UI trims the same rows), `agents` (the containers holding a connection, sent on every connect and disconnect and once when the stream opens). |
 | `GET` | `/api/log?since=&host=&cat=&decision=` | Recent records from the ring buffer (5000 entries). |
 | `POST` | `/api/shutdown` | Stop the proxy; see 11.4. Operator only. |
 | `POST` | `/api/restart` | Restart the proxy; see 11.4. Operator only. |

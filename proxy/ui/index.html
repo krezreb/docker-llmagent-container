@@ -158,6 +158,11 @@
         disconnected (connecting<span class="ellipsis">...</span>)
       </template>
     </span>
+    <!-- Connections, not containers: an agent that is idle holds nothing open
+         and is not counted. The names are on the hover. -->
+    <span class="dim" :title="agents.join(', ') || 'nothing connected'">
+      {{ agents.length }} agent{{ agents.length === 1 ? '' : 's' }} connected
+    </span>
     <span class="row">
       <button class="danger" @click="power('shutdown')">Shutdown</button>
       <button @click="power('restart')">Restart</button>
@@ -490,6 +495,7 @@ const app = Vue.createApp({
     ],
     hover: '',
     mode: '', rulesets: [], pending: [], log: [], open: null, connected: false,
+    agents: [],
     fetchedAt: Date.now(), now: Date.now(), newRuleset: '', error: '',
     paint: null,
     filter: {host: '', client: '', cat: '', decision: ''},
@@ -612,6 +618,7 @@ const app = Vue.createApp({
         events.addEventListener(kind, () => this.loadPending());
       }
       events.addEventListener('state', () => this.loadPolicy());
+      events.addEventListener('agents', e => { this.agents = JSON.parse(e.data); });
       events.addEventListener('purge', e => {
         const before = JSON.parse(e.data).before;
         this.log = before ? this.log.filter(r => r.ts > before) : [];

@@ -26,6 +26,16 @@ UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
 READ_ONLY = ("/api/policy", "/api/mode", "/api/rulesets")
 
 
+def agents(ctx) -> list[str]:
+    """The containers holding a connection to the proxy right now.
+
+    One name however many connections it has open, and a name only while it
+    is connected: an idle container is indistinguishable from a stopped one
+    from in here, so this counts conversations, not containers.
+    """
+    return sorted(set(ctx.clients.values()))
+
+
 def trusted_subnet() -> ipaddress.IPv4Network | None:
     """The subnet of the interface carrying the default route.
 
@@ -283,6 +293,10 @@ class Events(Base):
         # first event can be 20s away — the tab would sit on 'connecting' that
         # whole time. A comment line opens the stream now.
         self.write(": open\n\n")
+        # Seeded here rather than fetched: connect and disconnect only ever
+        # arrive as events, so a tab that opened between two of them would
+        # otherwise show nothing until the next one.
+        self.write(f"event: agents\ndata: {json.dumps(agents(self.ctx))}\n\n")
         await self.flush()
         queue = self.ctx.log.subscribe()
         try:
