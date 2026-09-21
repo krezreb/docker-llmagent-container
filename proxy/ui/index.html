@@ -250,6 +250,19 @@
                 </select>
                 <span class="deny" v-if="error">{{ error }}</span>
               </div>
+              <!-- The other rows: a ruleset decided this one, so the question
+                   is which rule that was and where it lives, rather than what
+                   to save. The label carries both. -->
+              <div v-else-if="matched(rec)" class="row" style="margin-bottom:.5rem">
+                <span :class="rec.decision">{{ rec.decision }}</span>
+                <span class="dim">by</span>
+                <span>“{{ matched(rec).rule }}”</span>
+                <span class="dim">in</span>
+                <span>{{ matched(rec).ruleset }}</span>
+                <!-- An unnamed ruleset is shown by its filename already. -->
+                <span class="dim mono" v-if="matched(rec).ruleset !== matched(rec).file">
+                  {{ matched(rec).file }}</span>
+              </div>
               <pre>{{ pretty(rec) }}</pre>
             </td>
           </tr>
@@ -547,7 +560,12 @@ const app = Vue.createApp({
     elapsed(entry) {
       return Math.round((entry.waiting_ms + this.now - this.fetchedAt) / 1000);
     },
-    pretty(record) { return JSON.stringify(record, null, 2); },
+    // `rule` is left out: it is in the decision column of the row above, and
+    // in the line this panel opens with, so a third copy is only noise.
+    pretty(record) {
+      const {rule, ...rest} = record;
+      return JSON.stringify(rest, null, 2);
+    },
 
     // A rule label is `<file>:<note>` when a ruleset decided the request, and
     // `mode:`, `pending:` or `error:` when none did — the latter is the row
@@ -555,6 +573,24 @@ const app = Vue.createApp({
     // by log-only or default-allow.
     covered(record) {
       return !!record.rule && !/^(mode|pending|error):/.test(record.rule);
+    },
+    // The rule behind a covered record: `<file>:<note>` as policy.decide
+    // writes it, with the ruleset's display name looked up from the policy.
+    // Split at the first colon only — the note is the operator's own text and
+    // may well carry one.
+    matched(record) {
+      if (!this.covered(record)) return null;
+      const cut = record.rule.indexOf(':');
+      if (cut < 0) return null;  // not a label this can take apart
+      const file = record.rule.slice(0, cut);
+      const ruleset = this.rulesets.find(r => r.file === file);
+      return {
+        file,
+        rule: record.rule.slice(cut + 1),
+        // A ruleset deleted since the request was logged has no name left to
+        // show, so the filename stands in for it.
+        ruleset: ruleset ? ruleset.name : file,
+      };
     },
     async addRuleFromLog(record, action) {
       // The same shape the pending pane saves under host+path: the directory
