@@ -18,11 +18,15 @@ CODEX_VERSION ?= $(or $(call npm_latest,@openai%2fcodex),latest)
 # 'make build-image DOCKER_BUILD_FLAGS=--no-cache' rebuilds everything.
 DOCKER_BUILD_FLAGS ?=
 
-.PHONY: install build-image images aliases autobuild-schedule $(VARIANTS)
+.PHONY: install proxy build-image images aliases autobuild-schedule $(VARIANTS)
 
 install: build-image
 	install -Dm755 dev-agent ~/.local/bin/dev-agent
 	test -f ~/.config/dev-agent/config.yml || install -Dm644 config.yml.example ~/.config/dev-agent/config.yml
+
+# The proxy ships its own image, compose file and skill; see proxy/Makefile.
+proxy:
+	$(MAKE) -C proxy install
 
 build-image:
 	docker build $(DOCKER_BUILD_FLAGS) \
