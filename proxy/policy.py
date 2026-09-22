@@ -349,6 +349,81 @@ class Policy:
             lambda doc: doc["rules"].pop(index),
         )
 
+    def move_rule(self, src: str, index: int, dst: str, at: int | None = None) -> None:
+        """Move one rule within its ruleset, or into another one, at `at`.
+
+        The rule's lines travel with it, comments and all, for the reason
+        delete_rule takes them along: what is written under a rule is about
+        that rule. `at` is the index it lands on in `dst` once it has left
+        `src`; None puts it at the end.
+        """
+        for name in (src, dst):
+            if name not in self.rulesets:
+                raise KeyError(name)
+
+        src_path = os.path.join(self.rulesets_dir, src)
+        dst_path = os.path.join(self.rulesets_dir, dst)
+        src_doc = yaml.safe_load(open(src_path).read()) or {}
+        dst_doc = yaml.safe_load(open(dst_path).read()) or {}
+
+        src_lines = open(src_path).read().split("\n")
+        spans = _rule_spans(src_lines)
+        if not 0 <= index < len(spans):
+            raise IndexError(f"{src} has {len(spans)} rules")
+        block = src_lines[spans[index][0]:spans[index][1] + 1]
+        del src_lines[spans[index][0]:spans[index][1] + 1]
+
+        moved = (src_doc.get("rules") or [])[index]
+        want_src = [r for i, r in enumerate(src_doc.get("rules") or []) if i != index]
+        want_dst = list(want_src) if src == dst else list(dst_doc.get("rules") or [])
+
+        # Within one file the rule is placed in the lines it has already left,
+        # so the two edits are one edit and there is one file to write.
+        dst_lines = src_lines if src == dst else open(dst_path).read().split("\n")
+        dst_spans = _rule_spans(dst_lines)
+        at = len(dst_spans) if at is None else max(0, min(int(at), len(dst_spans)))
+        want_dst.insert(at, moved)
+
+        if at < len(dst_spans):
+            cut = dst_spans[at][0]
+        elif dst_spans:
+            cut = dst_spans[-1][1] + 1
+        else:
+            # An empty ruleset: the first rule goes under the `rules:` key.
+            key = next((n for n, line in enumerate(dst_lines)
+                        if re.match(r"^rules:", line)), None)
+            cut = len(dst_lines) if key is None else key + 1
+        dst_lines[cut:cut] = block
+
+        def rules_of(text):
+            try:
+                return (yaml.safe_load(text) or {}).get("rules") or []
+            except Exception:
+                return None
+
+        src_text, dst_text = "\n".join(src_lines), "\n".join(dst_lines)
+        # Both files are checked before either is written: a move that landed
+        # in one and not the other would drop the rule or keep two of it.
+        if src == dst:
+            kept = rules_of(dst_text) == want_dst
+            if kept:
+                _atomic_write(dst_path, dst_text)
+        else:
+            kept = rules_of(src_text) == want_src and rules_of(dst_text) == want_dst
+            if kept:
+                _atomic_write(src_path, src_text)
+                _atomic_write(dst_path, dst_text)
+
+        if not kept:
+            # A file whose shape defeats the line edit is round-tripped, as
+            # everywhere else here — the rules survive, the comments do not.
+            if src != dst:
+                src_doc["rules"] = want_src
+                _write_yaml(src_path, src_doc)
+            dst_doc["rules"] = want_dst
+            _write_yaml(dst_path, dst_doc)
+        self.reload(force=True)
+
     def append_rule(self, filename: str, rule: Rule) -> None:
         self.append_rules(filename, [rule])
 

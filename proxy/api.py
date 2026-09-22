@@ -235,7 +235,15 @@ class Rules(Base):
         body = self.body()
         try:
             field = next((k for k in ("action", "match", "path", "note") if k in body), None)
-            if field:
+            if "to" in body or "to_file" in body:
+                target = body.get("to_file") or filename
+                if target not in self.ctx.policy.rulesets:
+                    raise tornado.web.HTTPError(404, reason="no such ruleset")
+                to = body.get("to")
+                self.ctx.policy.move_rule(filename, int(body["index"]), target,
+                                          None if to is None else int(to))
+                touched = 1
+            elif field:
                 self.ctx.policy.set_rule_field(filename, int(body["index"]), field, body[field])
                 touched = 1
             else:
@@ -417,6 +425,8 @@ class Index(tornado.web.RequestHandler):
             "  POST /api/rulesets/<file>/rules {\"rules\": [{\"match\": \"...\",\n"
             "                               \"action\": \"allow\", \"note\": \"...\"}]}\n"
             "  PUT  /api/rulesets/<file>/rules {\"indexes\": [0, 2], \"enabled\": false}\n"
+            "  PUT  /api/rulesets/<file>/rules {\"index\": 0, \"to\": 2,\n"
+            "                                   \"to_file\": \"other.yml\"}\n"
             "                          or {\"index\": 0, \"match\"|\"path\"|\n"
             "                              \"action\"|\"note\": \"...\"}\n"
             "  DELETE /api/rulesets/<file>/rules?index=0\n"

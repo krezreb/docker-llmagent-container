@@ -518,6 +518,41 @@ def test_create_ruleset():
     assert os.path.exists(os.path.join(directory, "rulesets", "etc-passwd.yml"))
 
 
+def test_move_rule_within_and_between_rulesets():
+    directory = state({"m.yml": MIXED, "e.yml": "name: e\nrules:\n"})
+    p = Policy(directory)
+
+    p.move_rule("m.yml", 2, "m.yml", 0)  # the flow one, to the top
+    assert [r.match for r in Policy(directory).rulesets["m.yml"].rules] == [
+        "c.example.com", "a.example.com", "b.example.com"]
+    text = open(os.path.join(directory, "rulesets", "m.yml")).read()
+    assert "# a ruleset written by hand" in text, text
+
+    p.move_rule("m.yml", 0, "e.yml")  # into an empty ruleset, at the end
+    assert [r.match for r in Policy(directory).rulesets["e.yml"].rules] == ["c.example.com"]
+    assert [r.match for r in Policy(directory).rulesets["m.yml"].rules] == [
+        "a.example.com", "b.example.com"]
+
+    p.move_rule("m.yml", 1, "e.yml", 0)  # in front of the one already there
+    fresh = Policy(directory)
+    assert [r.match for r in fresh.rulesets["e.yml"].rules] == [
+        "b.example.com", "c.example.com"]
+    assert fresh.rulesets["e.yml"].rules[0].action == "deny"  # the whole rule moved
+
+    for bad in (-1, 1):
+        try:
+            p.move_rule("m.yml", bad, "e.yml")
+        except IndexError:
+            continue
+        raise AssertionError(f"moved rule {bad} of a one-rule ruleset")
+
+    try:
+        p.move_rule("m.yml", 0, "nope.yml")
+        raise AssertionError("moved into a ruleset that does not exist")
+    except KeyError:
+        pass
+
+
 def test_append_rules_in_one_write():
     directory = state({"m.yml": MIXED})
     p = Policy(directory)

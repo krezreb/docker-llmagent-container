@@ -101,6 +101,13 @@
   /* Only the gutter is dragged, so only the gutter refuses to be selected;
      the cells beside it are inputs, whose text has to stay selectable. */
   td.grab { cursor: grab; user-select: none; }
+  /* The one thing on the row that starts a drag; the fields beside it stay
+     selectable, and the checkbox gutter keeps its own press for painting. */
+  td.handle { cursor: grab; user-select: none; color: var(--dim); text-align: center; }
+  /* Where the dragged rule would land: a line above the row it is over, or
+     the whole ruleset tinted when it would go to the end of that one. */
+  tr.rule.over > td { box-shadow: inset 0 2px 0 0 var(--accent); }
+  tr.into > td { background: var(--hit); }
   td.swap { cursor: pointer; }
   tr.rule.off td:not(:first-child) { opacity: .45; text-decoration: line-through; }
   /* An input does not inherit the row's line-through, so it is struck here. */
@@ -317,7 +324,9 @@
       <h2>Rulesets</h2>
       <table>
         <tbody>
-        <tr v-for="r in rulesets" :key="r.file" :id="'ruleset-' + r.file">
+        <tr v-for="r in rulesets" :key="r.file" :id="'ruleset-' + r.file"
+            @dragover.prevent="dragOverRule(r, null)" @drop.prevent="dropRule(r, null)"
+            :class="{into: dragOver.file === r.file && dragOver.index === null}">
           <td style="width:1%">
             <input type="checkbox" :checked="r.enabled" @change="toggle(r, $event)">
           </td>
@@ -358,6 +367,7 @@
             <table v-if="r.open" class="rules">
               <tbody>
               <tr>
+                <th style="width:1.2rem"></th>
                 <th style="width:1.6rem">on</th>
                 <th style="width:1%">action</th>
                 <th>host</th>
@@ -365,16 +375,24 @@
                 <th>note</th>
                 <th style="width:1%"></th>
               </tr>
-              <!-- The gutter is the only thing a drag starts on: press on the
-                   left edge and pull down it to paint a run of rules to the
-                   state the first one flipped to. Everything right of the
-                   gutter is a live field, so a click there puts a caret in the
-                   text rather than toggling the row, and there is no editor to
-                   open or dismiss. -->
+              <!-- Two grips on the left, and nothing else on the row drags:
+                   the handle moves the rule, and the checkbox gutter beside it
+                   paints a run of rules to the state the first one flipped to.
+                   Everything right of them is a live field, so a click there
+                   puts a caret in the text rather than toggling the row, and
+                   there is no editor to open or dismiss. -->
               <tr v-for="(rule, i) in r.detail" :key="i" class="rule"
                   :id="'rule-' + r.file + '-' + i"
+                  @dragover.prevent.stop="dragOverRule(r, i)"
+                  @drop.prevent.stop="dropRule(r, i)"
                   :class="{off: !rule.enabled,
-                           hit: highlight.file === r.file && highlight.index === i}">
+                           hit: highlight.file === r.file && highlight.index === i,
+                           over: dragOver.file === r.file && dragOver.index === i}">
+                <!-- Dropped on a rule the rule lands in front of it; dropped
+                     on the ruleset itself it goes to the end, which is how it
+                     reaches a ruleset that is closed. -->
+                <td class="handle" draggable="true" title="drag to reorder, or on to another ruleset"
+                    @dragstart="dragStart(r, i, $event)" @dragend="dragEnd()">&#9776;</td>
                 <td class="grab" style="width:1.6rem"
                     :title="'drag down the edge to turn a run ' + (rule.enabled ? 'off' : 'on')"
                     @mousedown.prevent="paintStart(r, i)" @mouseenter="paintOver(r, i)">
@@ -416,6 +434,7 @@
                    committed together. -->
               <tr v-for="(d, j) in r.draft" :key="'draft' + j">
                 <td></td>
+                <td></td>
                 <td>
                   <select v-model="d.action">
                     <option>allow</option>
@@ -436,7 +455,7 @@
               </tr>
               <tr v-if="drafted(r).length">
                 <td></td>
-                <td colspan="5">
+                <td colspan="6">
                   <button class="primary" @click="saveDrafts(r)">
                     save {{ drafted(r).length }} new
                   </button>
@@ -465,6 +484,12 @@ const HIT_MS = 6700;   // the length of the `hit` animation: the class comes off
                        // when it ends, so a second click plays it again.
 const LOG_MAX = 2000;  // the server's ring is 5000; this is one screen's worth
                        // of scrollback, kept small so the page stays quick.
+
+// How long the favicon's bolt stays lit for one request: as long as the
+// request itself, minus whatever it spent parked waiting for an operator,
+// floored at 100ms so the quick ones are still visible and capped at 3s so a
+// long download does not look like a stuck light.
+const zapMs = r => Math.min(Math.max((r.ms || 0) - (r.held_ms || 0), 100), 3000);
 
 const blankRule = () => ({action: 'allow', match: '', path: '', note: ''});
 
@@ -495,10 +520,16 @@ const app = Vue.createApp({
        hint: 'Allow all traffic, even if in deny rules.'},
     ],
     hover: '', blink: false,
+    // The traffic light: `zap` is the bolt being shown just now, `zaps` the
+    // lengths of the blinks still owed, and `zapTimer` the blinking chain,
+    // null while idle.
+    zap: false, zaps: [], zapTimer: null,
     mode: '', rulesets: [], pending: [], log: [], open: null, connected: false,
     agents: [],
     fetchedAt: Date.now(), now: Date.now(), newRuleset: '', error: '',
     paint: null,
+    // The rule being dragged, and the row it is over just now.
+    drag: null, dragOver: {file: '', index: -1},
     filter: {host: '', client: '', cat: '', decision: ''},
     // Where a rule saved from a log row goes, and how wide it is; one choice
     // for the pane, because one row is open at a time.
@@ -521,10 +552,13 @@ const app = Vue.createApp({
     // The tab carries the same sign as the pill that is on, so a background
     // window still says which mode is running — unless something is waiting
     // on an answer, in which case a yellow dot blinks over it: a still icon
-    // in a background tab is easy to miss, a flashing one is not.
+    // in a background tab is easy to miss, a flashing one is not. A request
+    // going through flicks a bolt up in the same spot, but a question waiting
+    // outranks traffic passing.
     favicon() {
       const icon = this.modes.find(m => m.value === this.mode)?.icon || '';
-      return this.pending.length && this.blink ? '\ud83d\udfe1' : icon;
+      if (this.pending.length && this.blink) return '\ud83d\udfe1';
+      return this.zap ? '\u26a1' : icon;
     },
     // Whatever the browser calls the viewer's zone: "CEST", "GMT+5:30", "PDT".
     tz() {
@@ -641,6 +675,16 @@ const app = Vue.createApp({
       events.addEventListener('request', e => {
         this.log.unshift(JSON.parse(e.data));
         if (this.log.length > LOG_MAX) this.log.length = LOG_MAX;
+        // One blink per request, as long as the request took, so a slow
+        // fetch holds the light and a quick one ticks it. The record only
+        // arrives once the request is done, so each blink trails its request
+        // by its own length; a light that is on *during* the request would
+        // need the proxy to announce the start as well.
+        // ponytail: queue capped at 5, extra blinks under a flood are
+        // dropped — the light is flickering either way.
+        const r = JSON.parse(e.data);
+        if (this.zaps.length < 5) this.zaps.push(zapMs(r));
+        if (!this.zapTimer) this.blinkZap();
       });
       for (const kind of ['pending', 'resolved']) {
         events.addEventListener(kind, () => this.loadPending());
@@ -651,6 +695,19 @@ const app = Vue.createApp({
         const before = JSON.parse(e.data).before;
         this.log = before ? this.log.filter(r => r.ts > before) : [];
       });
+    },
+
+    // A switch port's traffic light: lit for one queued blink, dark 120ms so
+    // the next one reads as a second blink, and on until the queue empties —
+    // then the chain ends, so an idle page redraws nothing.
+    blinkZap() {
+      this.zap = true;
+      this.zapTimer = setTimeout(() => {
+        this.zap = false;
+        this.zapTimer = this.zaps.length
+          ? setTimeout(() => this.blinkZap(), 120)
+          : null;
+      }, this.zaps.shift());
     },
 
     elapsed(entry) {
@@ -788,6 +845,43 @@ const app = Vue.createApp({
       if (paint && paint.indexes.size) {
         this.saveRules(paint.file, [...paint.indexes], paint.enabled);
       }
+    },
+    dragStart(ruleset, index, event) {
+      // Firefox starts no drag without a payload; the move itself rides in
+      // `drag`, since a drop only ever lands back on this page.
+      event.dataTransfer.setData('text/plain', '');
+      event.dataTransfer.effectAllowed = 'move';
+      // The handle is the only grip, but the row is what moves, so the row is
+      // what is drawn under the cursor.
+      event.dataTransfer.setDragImage(event.target.closest('tr'), 0, 0);
+      this.drag = {file: ruleset.file, index};
+    },
+    dragOverRule(ruleset, index) {
+      if (this.drag) this.dragOver = {file: ruleset.file, index};
+    },
+    dragEnd() {
+      this.drag = null;
+      this.dragOver = {file: '', index: -1};
+    },
+    async dropRule(ruleset, index) {
+      const from = this.drag;
+      this.dragEnd();
+      if (!from) return;
+      // The server places the rule once it has left, so dragging one down its
+      // own ruleset lands a row short of where it was dropped.
+      let to = index;
+      if (from.file === ruleset.file && index !== null) {
+        if (index > from.index) to = index - 1;
+        if (to === from.index) return;  // dropped where it already was
+      }
+      this.error = '';
+      try {
+        await put('/api/rulesets/' + from.file + '/rules',
+                  {index: from.index, to, to_file: ruleset.file});
+      } catch (e) {
+        this.error = e.message;
+      }
+      await this.loadPolicy();  // both rule counts moved
     },
     async swapAction(ruleset, index) {
       const rule = ruleset.detail[index];
