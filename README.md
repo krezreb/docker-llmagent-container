@@ -391,6 +391,7 @@ catalogue:
 | `ruby` | `ruby-full` |
 | `rust` | `rustc`, `cargo` from apt |
 | `rustup` | current Rust via the rustup installer |
+| `full` | all of the above except `rustup`, plus Playwright with headless Chromium and Firefox |
 
 A fresh LTS starts close to upstream — 26.04 carries rustc 1.93, Go 1.26, PHP
 8.5 — and then holds still for years while upstream moves. `rustup.Dockerfile` is
