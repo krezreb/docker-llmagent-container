@@ -717,8 +717,10 @@ const app = Vue.createApp({
     },
     toggleBaa() {
       this.baa = !this.baa;
-      if (this.baa) bleat(this.baas);  // a preview, on the click that allows sound
-      else hush();
+      // Switched on with something already waiting, the sheep says so; with
+      // nothing waiting it keeps quiet until a request is halted.
+      if (!this.baa) hush();
+      else if (this.pending.length) bleat(this.baas);
     },
     hush,
 
