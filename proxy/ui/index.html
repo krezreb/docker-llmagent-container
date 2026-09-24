@@ -171,6 +171,17 @@
     <span class="dim" :title="agents.join(', ') || 'no agent is up'">
       {{ agents.length }} agent{{ agents.length === 1 ? '' : 's' }} up
     </span>
+    <!-- A bleat per request that gets halted, for an operator who is looking
+         at another window rather than at this tab's favicon. -->
+    <span class="pills">
+      <button class="pill" :class="{on: baa}" :aria-pressed="baa" @click="toggleBaa"
+              title="Bleat when a request is halted waiting on you">
+        <span class="icon" aria-hidden="true">🐑</span>Baa
+      </button>
+      <select v-model.number="baas" class="pill" title="Baas per halted request">
+        <option v-for="n in 5" :key="n" :value="n">{{ n }}×</option>
+      </select>
+    </span>
     <span class="row">
       <button class="danger" @click="power('shutdown')">Shutdown</button>
       <button @click="power('restart')">Restart</button>
@@ -494,6 +505,34 @@ const LOG_MAX = 2000;  // the server's ring is 5000; this is one screen's worth
 // long download does not look like a stuck light.
 const zapMs = r => Math.min(Math.max((r.ms || 0) - (r.held_ms || 0), 100), 3000);
 
+// A sheep, synthesised: a buzzy sawtooth with a fast bleating vibrato, pushed
+// through a vowel-ish band-pass, sliding down in pitch as it fades. Browsers
+// keep audio muted until the page has been clicked, so after a reload the
+// bleats stay silent until the first click anywhere on the page.
+let audio;
+window.addEventListener('pointerdown', () => { audio ??= new AudioContext(); audio.resume(); });
+const bleat = count => {
+  if (audio?.state !== 'running') return;
+  for (let i = 0; i < count; i++) {
+    const t = audio.currentTime + 0.05 + i * 0.8, len = 0.6;
+    const voice = audio.createOscillator(), wobble = audio.createOscillator();
+    const depth = audio.createGain(), vowel = audio.createBiquadFilter(), gain = audio.createGain();
+    voice.type = 'sawtooth';
+    voice.frequency.setValueAtTime(330, t);
+    voice.frequency.exponentialRampToValueAtTime(260, t + len);
+    wobble.frequency.value = 9;
+    depth.gain.value = 18;
+    wobble.connect(depth).connect(voice.frequency);
+    vowel.type = 'bandpass'; vowel.frequency.value = 900; vowel.Q.value = 1.5;
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.4, t + 0.05);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + len);
+    voice.connect(vowel).connect(gain).connect(audio.destination);
+    voice.start(t); wobble.start(t);
+    voice.stop(t + len); wobble.stop(t + len);
+  }
+};
+
 const blankRule = () => ({action: 'allow', match: '', path: '', note: ''});
 
 const api = async (path, options) => {
@@ -522,7 +561,7 @@ const app = Vue.createApp({
       {value: 'log-only', icon: '\ud83d\udd2d', label: 'Log-only',
        hint: 'Allow all traffic, even if in deny rules.'},
     ],
-    hover: '', blink: false,
+    hover: '', blink: false, fetchedOnce: false,
     // The traffic light: `zap` is the bolt being shown just now, `zaps` the
     // lengths of the blinks still owed, and `zapTimer` the blinking chain,
     // null while idle.
@@ -537,6 +576,7 @@ const app = Vue.createApp({
     // How many matching records the table draws. The ring behind it still
     // holds LOG_MAX; this is only what the browser is asked to lay out, so a
     // tab left open all day does not end up rendering thousands of rows.
+    baa: localStorage.getItem('baa') === '1', baas: Number(localStorage.getItem('baas') ?? 1),
     cap: Number(localStorage.getItem('logCap') ?? 100), caps: [50, 100, 200, 500, 1000, 0],
     // Where a rule saved from a log row goes, and how wide it is; one choice
     // for the pane, because one row is open at a time.
@@ -587,6 +627,8 @@ const app = Vue.createApp({
 
   watch: {
     cap(n) { localStorage.setItem('logCap', n); },
+    baa(on) { localStorage.setItem('baa', on ? '1' : '0'); },
+    baas(n) { localStorage.setItem('baas', n); },
     favicon: {
       immediate: true,
       handler(icon) {
@@ -673,6 +715,16 @@ const app = Vue.createApp({
         scope: previous[p.key]?.scope || 'host',
       }));
       this.fetchedAt = Date.now();
+      // The first load is what was already waiting before the page opened;
+      // only requests halted since then get a bleat.
+      if (this.baa && this.fetchedOnce) {
+        for (const p of this.pending) if (!previous[p.key]) bleat(this.baas);
+      }
+      this.fetchedOnce = true;
+    },
+    toggleBaa() {
+      this.baa = !this.baa;
+      if (this.baa) bleat(this.baas);  // the click unlocks audio, and previews it
     },
 
     stream() {
