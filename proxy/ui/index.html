@@ -92,6 +92,14 @@
           font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji",
                        system-ui, sans-serif; }
   /* Full-width row of the wrapping header, so the hint sits under the pills. */
+  /* The sheep sits in the header's right-hand corner, out of the centred run.
+     The header keeps a sheep's width clear on both sides, so the run stays
+     centred and wraps before it reaches the corner; on a narrow screen that
+     room is too dear, and the sheep wraps with everything else instead. */
+  @media (min-width: 800px) {
+    header { padding-inline: 10rem; }
+    .sheep { position: absolute; right: 1rem; top: .7rem; }
+  }
   .hint { flex-basis: 100%; margin: -.3rem 0 0; color: var(--dim); font-size: .85rem;
           text-align: center; }
   .rules { margin: .4rem 0 0; }
@@ -171,9 +179,13 @@
     <span class="dim" :title="agents.join(', ') || 'no agent is up'">
       {{ agents.length }} agent{{ agents.length === 1 ? '' : 's' }} up
     </span>
+    <span class="row">
+      <button class="danger" @click="power('shutdown')">Shutdown</button>
+      <button @click="power('restart')">Restart</button>
+    </span>
     <!-- A bleat per request that gets halted, for an operator who is looking
          at another window rather than at this tab's favicon. -->
-    <span class="pills">
+    <span class="pills sheep">
       <button class="pill" :class="{on: baa}" :aria-pressed="baa" @click="toggleBaa"
               title="Bleat when a request is halted waiting on you">
         <span class="icon" aria-hidden="true">🐑</span>Baa
@@ -181,10 +193,6 @@
       <select v-model.number="baas" class="pill" title="Baas per halted request">
         <option v-for="n in 5" :key="n" :value="n">{{ n }}×</option>
       </select>
-    </span>
-    <span class="row">
-      <button class="danger" @click="power('shutdown')">Shutdown</button>
-      <button @click="power('restart')">Restart</button>
     </span>
     <!-- Hovering a pill explains the mode it would switch to; otherwise the
          line describes the mode that is on. -->
