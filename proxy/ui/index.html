@@ -569,7 +569,9 @@ const app = Vue.createApp({
     // How many matching records the table draws. The ring behind it still
     // holds LOG_MAX; this is only what the browser is asked to lay out, so a
     // tab left open all day does not end up rendering thousands of rows.
-    baa: localStorage.getItem('baa') === '1', baas: Number(localStorage.getItem('baas') ?? 1),
+    // The sheep starts off on every load, not remembered: switching it on is
+    // the click the browser wants before it lets the page make a sound.
+    baa: false, baas: Number(localStorage.getItem('baas') ?? 1),
     cap: Number(localStorage.getItem('logCap') ?? 100), caps: [50, 100, 200, 500, 1000, 0],
     // Where a rule saved from a log row goes, and how wide it is; one choice
     // for the pane, because one row is open at a time.
@@ -620,7 +622,6 @@ const app = Vue.createApp({
 
   watch: {
     cap(n) { localStorage.setItem('logCap', n); },
-    baa(on) { localStorage.setItem('baa', on ? '1' : '0'); },
     baas(n) { localStorage.setItem('baas', n); },
     favicon: {
       immediate: true,
