@@ -510,11 +510,13 @@ const zapMs = r => Math.min(Math.max((r.ms || 0) - (r.held_ms || 0), 100), 3000)
 // muted until the page has been clicked, so after a reload the bleats stay
 // silent until the first click anywhere on the page.
 let audio, clip;
-window.addEventListener('pointerdown', () => {
+const unlock = () => {
   audio ??= new AudioContext();
   audio.resume();
   clip ??= fetch('baa.wav').then(r => r.arrayBuffer()).then(b => audio.decodeAudioData(b));
-});
+};
+window.addEventListener('pointerdown', unlock);
+window.addEventListener('keydown', unlock);
 // One baa starting at `t`; returns the time it ends. playbackRate moves pitch
 // and length together, like a slightly bigger or smaller sheep.
 const play = (buffer, t) => {
@@ -527,7 +529,11 @@ const play = (buffer, t) => {
   return t + buffer.duration / src.playbackRate.value;
 };
 const bleat = async count => {
-  if (audio?.state !== 'running') return;
+  // No context means no click yet, which the browser would refuse anyway. A
+  // new context always starts 'suspended' and turns 'running' a moment later,
+  // so the click that creates it has to wait for that rather than check it.
+  if (!audio) return;
+  await audio.resume();
   const buffer = await clip;
   let t = audio.currentTime + 0.05;
   for (let i = 0; i < count; i++) t = play(buffer, t) + 0.1;
