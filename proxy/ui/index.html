@@ -596,10 +596,11 @@ const app = Vue.createApp({
     // on an answer, in which case a yellow dot blinks over it: a still icon
     // in a background tab is easy to miss, a flashing one is not. A request
     // going through flicks a bolt up in the same spot, but a question waiting
-    // outranks traffic passing.
+    // outranks traffic passing. With the sheep on, the sheep blinks instead
+    // of the dot, so the tab says which one is bleating.
     favicon() {
       const icon = this.modes.find(m => m.value === this.mode)?.icon || '';
-      if (this.pending.length && this.blink) return '\ud83d\udfe1';
+      if (this.pending.length && this.blink) return this.baa ? '\ud83d\udc11' : '\ud83d\udfe1';
       return this.zap ? '\u26a1' : icon;
     },
     // Whatever the browser calls the viewer's zone: "CEST", "GMT+5:30", "PDT".
