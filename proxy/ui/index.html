@@ -40,7 +40,12 @@
        letter-spacing: .06em; color: var(--dim); }
   main { padding: 1rem; display: grid; gap: 1rem; }
   section { border: 1px solid var(--line); border-radius: 6px; padding: .8rem; }
-  section.urgent { border-color: var(--pending); }
+  /* Pending stays in view under the header while the log scrolls past; a
+     long queue scrolls inside the pane rather than covering the page. The
+     header's height changes as it wraps, so the page keeps --header-h. */
+  section.urgent { border-color: var(--pending); position: sticky; z-index: 1;
+                   top: var(--header-h, 0); background: var(--bg);
+                   max-height: 50vh; overflow-y: auto; }
   .dim { color: var(--dim); }
   .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
   .row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
@@ -185,7 +190,9 @@
     </span>
     <!-- A bleat per request that gets halted, for an operator who is looking
          at another window rather than at this tab's favicon. -->
-    <span class="pills sheep">
+    <!-- Only default-deny holds requests, so only there is there anything to
+         bleat about. -->
+    <span v-if="mode === 'default-deny'" class="pills sheep">
       <button class="pill" :class="{on: baa}" :aria-pressed="baa" @click="toggleBaa"
               title="Bleat when a request is halted waiting on you">
         <span class="icon" aria-hidden="true">🐑</span>Baa
@@ -648,6 +655,9 @@ const app = Vue.createApp({
     // A drag ends wherever the button comes up, which is often outside the row
     // it started in and sometimes outside the table.
     window.addEventListener('mouseup', () => this.paintEnd());
+    const header = document.querySelector('header');
+    new ResizeObserver(() => document.documentElement.style
+      .setProperty('--header-h', header.offsetHeight + 'px')).observe(header);
     // Only the displayed age ticks; the entries themselves arrive over SSE.
     setInterval(() => { this.now = Date.now(); }, 1000);
     // The blink of the pending favicon. Left alone when nothing is pending,
