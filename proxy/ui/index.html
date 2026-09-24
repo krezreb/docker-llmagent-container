@@ -194,7 +194,9 @@
   <main>
     <!-- Pending takes the top of the page: it is the one pane someone is
          actually waiting on. -->
-    <section v-if="pending.length" class="urgent">
+    <!-- A click anywhere in the pane means someone is looking: the sheep
+         can stop. -->
+    <section v-if="pending.length" class="urgent" @click="hush">
       <h2>Pending — {{ pending.length }} waiting on you</h2>
       <table>
         <tbody>
@@ -505,14 +507,24 @@ const LOG_MAX = 2000;  // the server's ring is 5000; this is one screen's worth
 // long download does not look like a stuck light.
 const zapMs = r => Math.min(Math.max((r.ms || 0) - (r.held_ms || 0), 100), 3000);
 
-// A sheep, recorded in baa.wav, played `count` times back to back. Browsers
-// refuse to play sound on a page nobody has clicked yet; that refusal goes to
-// the console rather than nowhere, so a silent sheep can say why.
+// One sheep for the page, recorded in baa.wav, and the baas it still owes. A
+// request halted mid-bleat adds to the queue rather than starting a second
+// sheep over the first; hush() drops the queue and stops the one playing.
+// Browsers refuse to play sound on a page nobody has clicked yet; that refusal
+// goes to the console rather than nowhere, so a silent sheep can say why.
+const baa = new Audio('baa.wav');
+let baasOwed = 0;
+const playBaa = () => baa.play().catch(e => {
+  baasOwed = 0;
+  console.warn('baa not played:', e.message);
+});
+baa.onended = () => { if (--baasOwed > 0) playBaa(); };
 const bleat = count => {
-  const baa = new Audio('baa.wav');
-  baa.onended = () => { if (--count > 0) baa.play(); };
-  baa.play().catch(e => console.warn('baa not played:', e.message));
+  const idle = !baasOwed;
+  baasOwed += count;
+  if (idle) playBaa();
 };
+const hush = () => { baasOwed = 0; baa.pause(); baa.currentTime = 0; };
 
 const blankRule = () => ({action: 'allow', match: '', path: '', note: ''});
 
@@ -706,7 +718,9 @@ const app = Vue.createApp({
     toggleBaa() {
       this.baa = !this.baa;
       if (this.baa) bleat(this.baas);  // a preview, on the click that allows sound
+      else hush();
     },
+    hush,
 
     stream() {
       const events = new EventSource('/api/events');
