@@ -22,6 +22,9 @@ RUN apt-get update \
         figlet lolcat \
     && rm -rf /var/lib/apt/lists/*
 
+# Extra figlet font for the agent banner (see dev-agent-entrypoint below).
+ADD --chmod=644 https://raw.githubusercontent.com/cmatsuoka/figlet-fonts/0ab03ceaa3ebcfa3c691d3d87e692215d8bddfb0/contributed/stampatello.flf /usr/share/figlet/
+
 # Under 'dev-agent --workspace' the project is bind-mounted at /workspace while
 # the same checkout lives somewhere else entirely on the host, so the absolute
 # paths git normally writes into a worktree's link files ("gitdir:
@@ -84,7 +87,7 @@ WORKDIR /workspace
 # DEV_AGENT_HEARTBEAT set (every run but --proxy) nothing is sent.
 #
 # The banner names the container by the number that ends the name the proxy
-# shows: dev-agent-bash-12345 prints as agent-12345, and the same number seeds
+# shows: dev-agent-bash-12345 prints as A-12345, and the same number seeds
 # the colours, so each agent keeps its own rainbow. Only on a terminal:
 # dev-agent also runs this image to cat the CA bundle out of it, and a banner
 # in that output would end up inside the bundle.
@@ -93,7 +96,7 @@ COPY --chmod=755 <<'EOF' /usr/local/bin/dev-agent-entrypoint
 if [ -n "$DEV_AGENT_NAME" ] && [ -t 1 ]; then
     n="${DEV_AGENT_NAME##*-}"
     echo
-    figlet -f small -w "${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}" "agent-$n" \
+    figlet -f stampatello -w "${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}" "A-$n" \
         | /usr/games/lolcat --seed "$n" 2>/dev/null || true
     echo
 fi
