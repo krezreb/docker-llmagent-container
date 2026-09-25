@@ -9,6 +9,11 @@ services:
     # 0 to stay down and 1 to come back, and a crash still comes back. A
     # shut-down proxy is started again by the next 'dev-agent --proxy'.
     restart: on-failure
+    # As whoever runs dev-agent, which exports these, so that /state on the
+    # host is theirs rather than root's. HOME because root's is not writable.
+    user: "${DEV_AGENT_UID:-1000}:${DEV_AGENT_GID:-1000}"
+    environment:
+      HOME: /tmp
     ports:
       - "127.0.0.1:8099:8099"
     volumes:

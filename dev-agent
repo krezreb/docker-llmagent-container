@@ -321,6 +321,11 @@ if [[ -n "$proxy" ]]; then
     [[ -f "$proxy_compose" ]] ||
         die "no proxy compose file at $proxy_compose; run 'make -C proxy install'"
 
+    # The proxy runs as this user. Created here because a bind mount docker
+    # has to create itself is created root-owned.
+    mkdir -p "$proxy_state"
+    export DEV_AGENT_UID="$(id -u)" DEV_AGENT_GID="$(id -g)"
+
     # Idempotent and fast when the proxy is already up. Failure is fatal:
     # --proxy that silently degraded to unfiltered access would be worse than
     # --proxy that refuses to start.
