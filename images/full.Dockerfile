@@ -29,3 +29,15 @@ RUN curl -fsSL https://getcomposer.org/installer -o /tmp/composer-setup.php \
 # gem installs into /var/lib/gems by default, which is read-only at runtime.
 ENV GEM_HOME=/home/agent/.gem \
     PATH=/home/agent/.gem/bin:$PATH
+
+# Headless Chromium and Firefox for agents to drive through Playwright
+# ('playwright screenshot', or require('playwright') from node). Baked in
+# because the proxy would block the download at runtime, and kept under /opt so
+# they stay readable whichever uid the container runs as.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright \
+    NODE_PATH=/usr/lib/node_modules
+RUN npm install -g playwright \
+    && playwright install --with-deps chromium firefox \
+    && chmod -R a+rX /opt/playwright \
+    && npm cache clean --force \
+    && rm -rf /var/lib/apt/lists/*

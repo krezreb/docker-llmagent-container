@@ -346,6 +346,7 @@ RUN apt-get update \
 ```sh
 make rust                                          # builds dev-agent:rust
 DEV_AGENT_IMAGE=dev-agent:rust dev-agent claude .
+dev-agent --image rust claude .                    # same; a bare name means dev-agent:<name>
 ```
 
 `make images` builds every `images/*.Dockerfile`. Each variant depends on the base, so
@@ -391,6 +392,7 @@ catalogue:
 | `ruby` | `ruby-full` |
 | `rust` | `rustc`, `cargo` from apt |
 | `rustup` | current Rust via the rustup installer |
+| `full` | all of the above except `rustup`, plus Playwright with headless Chromium and Firefox |
 
 A fresh LTS starts close to upstream — 26.04 carries rustc 1.93, Go 1.26, PHP
 8.5 — and then holds still for years while upstream moves. `rustup.Dockerfile` is
@@ -409,7 +411,9 @@ make php                                                    # PHP 8.5
 ```
 
 To make a project always use its own image, export `DEV_AGENT_IMAGE` from a shell
-alias, a direnv `.envrc`, or a small script in the project.
+alias, a direnv `.envrc`, or a small script in the project. To change the default
+everywhere, set `default_image: full` in `~/.config/dev-agent/config.yml`;
+`DEV_AGENT_IMAGE` and `--image` still override it.
 
 A derived image has to leave the sandbox intact, since the flags come from the wrapper
 and not from the image:

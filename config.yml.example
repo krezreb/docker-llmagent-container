@@ -1,5 +1,9 @@
 # ~/.config/dev-agent/config.yml
 #
+# The image to run when neither --image nor DEV_AGENT_IMAGE names one. A bare
+# variant name such as "full" means dev-agent:full.
+# default_image: dev-agent:ubuntu26
+
 # Extra host paths to expose inside the container, one per line, as
 #   - source:destination[:ro]
 # "~" is expanded. The source must already exist.

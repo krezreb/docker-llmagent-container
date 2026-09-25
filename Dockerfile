@@ -19,6 +19,7 @@ RUN apt-get update \
         pkg-config \
         ripgrep \
         procps vim tmux \
+        figlet lolcat \
     && rm -rf /var/lib/apt/lists/*
 
 # Under 'dev-agent --workspace' the project is bind-mounted at /workspace while
@@ -55,6 +56,15 @@ RUN npm install -g \
 
 RUN echo "alias ll='ls -alF'" >> /etc/bash.bashrc
 
+# The container runs as the host's uid, which the image knows as 'ubuntu', so
+# the stock prompt reads ubuntu@dev-agent-full. Name the agent instead, the
+# same way the banner does: agent-12345@dev-agent-full.
+RUN cat >> /etc/bash.bashrc <<'EOF'
+if [ -n "${DEV_AGENT_NAME-}" ]; then
+    PS1='${debian_chroot:+($debian_chroot)}agent-${DEV_AGENT_NAME##*-}@\h:\w\$ '
+fi
+EOF
+
 RUN mkdir -p /workspace
 
 ENV HOME=/home/agent
@@ -72,8 +82,21 @@ WORKDIR /workspace
 # Backgrounded and never fatal: this is a status line, and an agent has to run
 # whether the proxy is reachable, unreachable, or not in use at all — without
 # DEV_AGENT_HEARTBEAT set (every run but --proxy) nothing is sent.
+#
+# The banner names the container by the number that ends the name the proxy
+# shows: dev-agent-bash-12345 prints as agent-12345, and the same number seeds
+# the colours, so each agent keeps its own rainbow. Only on a terminal:
+# dev-agent also runs this image to cat the CA bundle out of it, and a banner
+# in that output would end up inside the bundle.
 COPY --chmod=755 <<'EOF' /usr/local/bin/dev-agent-entrypoint
 #!/bin/sh
+if [ -n "$DEV_AGENT_NAME" ] && [ -t 1 ]; then
+    n="${DEV_AGENT_NAME##*-}"
+    echo
+    figlet -f small -w "${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}" "agent-$n" \
+        | /usr/games/lolcat --seed "$n" 2>/dev/null || true
+    echo
+fi
 if [ -n "$DEV_AGENT_HEARTBEAT" ]; then
     while :; do
         curl -fsS -m 5 -X POST "$DEV_AGENT_HEARTBEAT" -o /dev/null 2>/dev/null
