@@ -56,6 +56,15 @@ RUN npm install -g \
 
 RUN echo "alias ll='ls -alF'" >> /etc/bash.bashrc
 
+# The container runs as the host's uid, which the image knows as 'ubuntu', so
+# the stock prompt reads ubuntu@dev-agent-full. Name the agent instead, the
+# same way the banner does: agent-12345@dev-agent-full.
+RUN cat >> /etc/bash.bashrc <<'EOF'
+if [ -n "${DEV_AGENT_NAME-}" ]; then
+    PS1='${debian_chroot:+($debian_chroot)}agent-${DEV_AGENT_NAME##*-}@\h:\w\$ '
+fi
+EOF
+
 RUN mkdir -p /workspace
 
 ENV HOME=/home/agent
