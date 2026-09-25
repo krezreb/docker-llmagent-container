@@ -1,2 +1,5 @@
 __pycache__/
 *.py[cod]
+
+# Your own local variants; see README.md.
+images/custom*.Dockerfile

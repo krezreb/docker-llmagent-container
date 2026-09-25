@@ -368,6 +368,10 @@ Re-run `make install` afterwards if your `dev-agent` predates this, since the sc
 what starts the service. `DEV_AGENT_NO_AUTOBUILD=1` skips the check for one run, and
 removing `~/.config/systemd/user/dev-agent-autobuild.service` turns it off for good.
 
+Name a variant `images/custom*.Dockerfile` to keep it out of git and still have
+`make images` (and so the autobuild) build it. Custom variants build after the stock
+ones, so one can start `FROM dev-agent:full`.
+
 `make aliases` saves typing `DEV_AGENT_IMAGE=` by hand — it writes one alias per
 variant to `~/.bashrc`:
 

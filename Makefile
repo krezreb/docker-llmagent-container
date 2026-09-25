@@ -39,6 +39,9 @@ images: $(VARIANTS)
 $(VARIANTS): %: build-image
 	docker build $(DOCKER_BUILD_FLAGS) -t dev-agent:$@ -f images/$@.Dockerfile .
 
+# Your own images/custom*.Dockerfile may build FROM a stock variant, so they go last.
+$(filter custom%,$(VARIANTS)): $(filter-out custom%,$(VARIANTS))
+
 # A user service that rebuilds every image, started by dev-agent on its first
 # run of the day (see the autobuild block in the script). A unit rather than a
 # background job so the build survives closing the terminal and its output ends
