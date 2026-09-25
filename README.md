@@ -370,7 +370,27 @@ removing `~/.config/systemd/user/dev-agent-autobuild.service` turns it off for g
 
 Name a variant `images/custom*.Dockerfile` to keep it out of git and still have
 `make images` (and so the autobuild) build it. Custom variants build after the stock
-ones, so one can start `FROM dev-agent:full`.
+ones, so one can start `FROM dev-agent:full`:
+
+```dockerfile
+# images/custom-full-aws.Dockerfile
+FROM dev-agent:full
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends unzip \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscli.zip \
+    && unzip -q /tmp/awscli.zip -d /tmp \
+    && /tmp/aws/install \
+    && rm -rf /tmp/aws /tmp/awscli.zip
+```
+
+```sh
+make custom-full-aws                          # builds every stock variant first, then this
+dev-agent --image custom-full-aws claude .
+```
+
+`make aliases` picks custom variants up like any other (`dev-agent-custom-full-aws`).
 
 `make aliases` saves typing `DEV_AGENT_IMAGE=` by hand — it writes one alias per
 variant to `~/.bashrc`:
