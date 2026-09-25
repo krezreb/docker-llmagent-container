@@ -3,16 +3,6 @@ set -euo pipefail
 
 IMAGE="${DEV_AGENT_IMAGE:-dev-agent:ubuntu26}"
 
-# The hostname mirrors the image, so the shell prompt names the variant you are
-# in. A hostname may only hold alphanumerics and hyphens, so the ':' of the tag
-# and any registry slashes and dots collapse to '-': dev-agent:php becomes
-# dev-agent-php, and the 63-character limit is enforced.
-hostname="${IMAGE//[^[:alnum:]-]/-}"
-hostname="${hostname:0:63}"
-while [[ "$hostname" == -* ]]; do hostname="${hostname#-}"; done
-while [[ "$hostname" == *- ]]; do hostname="${hostname%-}"; done
-hostname="${hostname:-dev-agent}"
-
 usage() {
     cat >&2 <<'EOF'
 Usage:
@@ -39,6 +29,10 @@ Options:
                 already running; its web UI is at http://127.0.0.1:8099.
                 Log in once with --host-network first: the OAuth callback
                 cannot reach a container on an internal network.
+    --image NAME
+                Run this image instead of $DEV_AGENT_IMAGE or the default
+                dev-agent:ubuntu26. A bare variant name such as 'full' means
+                dev-agent:full.
 
 Options may be given before the command or before the directory; everything
 from the directory on goes to the agent.
@@ -56,6 +50,7 @@ Examples:
     dev-agent --workspace claude ~/src/foo
     dev-agent --host-network codex ~/src/foo
     dev-agent --proxy claude ~/src/foo
+    dev-agent --image full claude ~/src/foo
 EOF
     exit 2
 }
@@ -93,6 +88,13 @@ esac
 # cannot be mirrored; mirroring that was asked for by name is an error there.
 mirror_asked=""
 
+# A bare variant name is one of ours: '--image full' means dev-agent:full.
+image_flag() {
+    [[ -n "$1" ]] || die "--image needs an image name"
+    IMAGE="$1"
+    [[ "$IMAGE" == *[:/]* ]] || IMAGE="dev-agent:$IMAGE"
+}
+
 # Reads the leading wrapper options out of "$@" and reports in
 # 'flags_consumed' how many of them the caller should shift away.
 take_flags() {
@@ -105,6 +107,12 @@ take_flags() {
             --workspace) mirror=""; mirror_asked="" ;;
             --host-network) host_net=1 ;;
             --proxy)     proxy=1 ;;
+            --image)
+                image_flag "${2:-}"
+                shift
+                flags_consumed=$((flags_consumed + 1))
+                ;;
+            --image=*)   image_flag "${1#--image=}" ;;
             *)           return ;;
         esac
 
@@ -138,6 +146,16 @@ esac
 
 take_flags "$@"
 shift "$flags_consumed"
+
+# The hostname mirrors the image, so the shell prompt names the variant you are
+# in. A hostname may only hold alphanumerics and hyphens, so the ':' of the tag
+# and any registry slashes and dots collapse to '-': dev-agent:php becomes
+# dev-agent-php, and the 63-character limit is enforced.
+hostname="${IMAGE//[^[:alnum:]-]/-}"
+hostname="${hostname:0:63}"
+while [[ "$hostname" == -* ]]; do hostname="${hostname#-}"; done
+while [[ "$hostname" == *- ]]; do hostname="${hostname%-}"; done
+hostname="${hostname:-dev-agent}"
 
 # First argument is a directory if supplied.
 if [[ $# -gt 0 && -d "$1" ]]; then

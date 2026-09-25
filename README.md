@@ -346,6 +346,7 @@ RUN apt-get update \
 ```sh
 make rust                                          # builds dev-agent:rust
 DEV_AGENT_IMAGE=dev-agent:rust dev-agent claude .
+dev-agent --image rust claude .                    # same; a bare name means dev-agent:<name>
 ```
 
 `make images` builds every `images/*.Dockerfile`. Each variant depends on the base, so
