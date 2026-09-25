@@ -83,8 +83,10 @@ COPY --chmod=755 <<'EOF' /usr/local/bin/dev-agent-entrypoint
 #!/bin/sh
 if [ -n "$DEV_AGENT_NAME" ] && [ -t 1 ]; then
     n="${DEV_AGENT_NAME##*-}"
+    echo
     figlet -f small -w "${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}" "agent-$n" \
         | /usr/games/lolcat --seed "$n" 2>/dev/null || true
+    echo
 fi
 if [ -n "$DEV_AGENT_HEARTBEAT" ]; then
     while :; do
