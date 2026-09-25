@@ -411,7 +411,9 @@ make php                                                    # PHP 8.5
 ```
 
 To make a project always use its own image, export `DEV_AGENT_IMAGE` from a shell
-alias, a direnv `.envrc`, or a small script in the project.
+alias, a direnv `.envrc`, or a small script in the project. To change the default
+everywhere, set `default_image: full` in `~/.config/dev-agent/config.yml`;
+`DEV_AGENT_IMAGE` and `--image` still override it.
 
 A derived image has to leave the sandbox intact, since the flags come from the wrapper
 and not from the image:

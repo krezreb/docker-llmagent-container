@@ -1,7 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE="${DEV_AGENT_IMAGE:-dev-agent:ubuntu26}"
+config="${DEV_AGENT_CONFIG:-$HOME/.config/dev-agent/config.yml}"
+
+# The image: --image, else DEV_AGENT_IMAGE, else 'default_image:' from the
+# config file, else the base. A bare name in the config file or the flag is
+# one of ours: 'full' means dev-agent:full.
+default_image=""
+
+if [[ -f "$config" ]]; then
+    default_image=$(awk '
+        /^default_image:/ {
+            sub(/^default_image:[[:space:]]*/, "")
+            sub(/[[:space:]]*(#.*)?$/, "")
+            gsub(/^["\047]|["\047]$/, "")
+            print
+            exit
+        }
+    ' "$config")
+fi
+
+if [[ -n "$default_image" && "$default_image" != *[:/]* ]]; then
+    default_image="dev-agent:$default_image"
+fi
+
+IMAGE="${DEV_AGENT_IMAGE:-${default_image:-dev-agent:ubuntu26}}"
 
 usage() {
     cat >&2 <<'EOF'
@@ -30,9 +53,9 @@ Options:
                 Log in once with --host-network first: the OAuth callback
                 cannot reach a container on an internal network.
     --image NAME
-                Run this image instead of $DEV_AGENT_IMAGE or the default
-                dev-agent:ubuntu26. A bare variant name such as 'full' means
-                dev-agent:full.
+                Run this image instead of $DEV_AGENT_IMAGE, 'default_image:'
+                in config.yml, or dev-agent:ubuntu26. A bare variant name
+                such as 'full' means dev-agent:full.
 
 Options may be given before the command or before the directory; everything
 from the directory on goes to the agent.
@@ -88,7 +111,6 @@ esac
 # cannot be mirrored; mirroring that was asked for by name is an error there.
 mirror_asked=""
 
-# A bare variant name is one of ours: '--image full' means dev-agent:full.
 image_flag() {
     [[ -n "$1" ]] || die "--image needs an image name"
     IMAGE="$1"
@@ -463,8 +485,6 @@ fi
 #     - ~/.gitconfig:/home/agent/.gitconfig:ro
 #     - /data:/data
 #
-config="${DEV_AGENT_CONFIG:-$HOME/.config/dev-agent/config.yml}"
-
 extra_mounts=()
 
 if [[ -f "$config" ]]; then
