@@ -19,6 +19,7 @@ RUN apt-get update \
         pkg-config \
         ripgrep \
         procps vim tmux \
+        figlet lolcat \
     && rm -rf /var/lib/apt/lists/*
 
 # Under 'dev-agent --workspace' the project is bind-mounted at /workspace while
@@ -72,8 +73,16 @@ WORKDIR /workspace
 # Backgrounded and never fatal: this is a status line, and an agent has to run
 # whether the proxy is reachable, unreachable, or not in use at all — without
 # DEV_AGENT_HEARTBEAT set (every run but --proxy) nothing is sent.
+#
+# The banner names the container the way the proxy does. Only on a terminal:
+# dev-agent also runs this image to cat the CA bundle out of it, and a banner
+# in that output would end up inside the bundle.
 COPY --chmod=755 <<'EOF' /usr/local/bin/dev-agent-entrypoint
 #!/bin/sh
+if [ -n "$DEV_AGENT_NAME" ] && [ -t 1 ]; then
+    figlet -w "${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}" "$DEV_AGENT_NAME" \
+        | /usr/games/lolcat 2>/dev/null || true
+fi
 if [ -n "$DEV_AGENT_HEARTBEAT" ]; then
     while :; do
         curl -fsS -m 5 -X POST "$DEV_AGENT_HEARTBEAT" -o /dev/null 2>/dev/null

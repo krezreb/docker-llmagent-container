@@ -46,7 +46,7 @@ Options:
                 Share the host's network namespace, for a login flow whose
                 callback URL points at localhost. Drops the container's
                 network isolation, and the prompt then shows the host's
-                hostname instead of the image's.
+                hostname instead of the image's. Not with --proxy.
     --proxy     Route all network access through the dev-agent proxy and cut
                 off direct internet access. Starts the proxy if it is not
                 already running; its web UI is at http://127.0.0.1:8099.
@@ -168,6 +168,12 @@ esac
 
 take_flags "$@"
 shift "$flags_consumed"
+
+# The proxy is reached as 'dev-agent-proxy' on a network made for this
+# container, and --host-network skips that network, so the pair would leave
+# every request pointed at a name that does not resolve.
+[[ -n "$proxy" && -n "$host_net" ]] &&
+    die "--proxy and --host-network cannot be combined"
 
 # The hostname mirrors the image, so the shell prompt names the variant you are
 # in. A hostname may only hold alphanumerics and hyphens, so the ':' of the tag
@@ -561,6 +567,12 @@ docker_args=(
     # Only explicitly selected environment values.
     --env HOME=/home/agent
     --env "TERM=${TERM:-xterm-256color}"
+
+    # The container's own name, which is also what the proxy's log and UI
+    # call it. Nothing inside can work it out alone: off the proxy's network
+    # there is no reverse lookup that answers, and under --host-network the
+    # container has no address of its own to look up.
+    --env "DEV_AGENT_NAME=${container_name}"
 
 )
 

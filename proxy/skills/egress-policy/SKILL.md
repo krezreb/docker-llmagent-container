@@ -22,7 +22,8 @@ naming the rule that decided.
 You cannot change the policy from in here; that endpoint is read-only. A human
 can, from the UI at `http://127.0.0.1:8099` on the host. If you need a host that
 is not allowed, say which host and why, and ask them to allow it — that is the
-correct next step, not a workaround.
+correct next step, not a workaround. The UI lists this container as
+`$DEV_AGENT_NAME`; give that name too, so they approve the right request.
 
 Anything that is not HTTP or HTTPS has no route out at all, including `git`
 over SSH. Use an HTTPS remote.
