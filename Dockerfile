@@ -23,7 +23,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Extra figlet font for the agent banner (see dev-agent-entrypoint below).
-ADD --chmod=644 https://raw.githubusercontent.com/cmatsuoka/figlet-fonts/0ab03ceaa3ebcfa3c691d3d87e692215d8bddfb0/contributed/stampatello.flf /usr/share/figlet/
+ADD --chmod=644 https://raw.githubusercontent.com/cmatsuoka/figlet-fonts/0ab03ceaa3ebcfa3c691d3d87e692215d8bddfb0/contributed/starwars.flf /usr/share/figlet/
 
 # Under 'dev-agent --workspace' the project is bind-mounted at /workspace while
 # the same checkout lives somewhere else entirely on the host, so the absolute
@@ -96,7 +96,7 @@ COPY --chmod=755 <<'EOF' /usr/local/bin/dev-agent-entrypoint
 if [ -n "$DEV_AGENT_NAME" ] && [ -t 1 ]; then
     n="${DEV_AGENT_NAME##*-}"
     echo
-    figlet -f stampatello -w "${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}" "A-$n" \
+    figlet -f starwars -w "${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}" "A-$n" \
         | /usr/games/lolcat --seed "$n" 2>/dev/null || true
     echo
 fi
