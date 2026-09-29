@@ -57,7 +57,8 @@ Options:
                 in config.yml, or dev-agent:ubuntu26. A bare variant name
                 such as 'full' means dev-agent:full.
     --kill-all  Kill every running dev-agent container, after asking, and
-                exit. The proxy is left running.
+                exit. The agents get SIGINT first and 3 seconds to print
+                their resume hints. The proxy is left running.
 
 Options may be given before the command or before the directory; everything
 from the directory on goes to the agent.
@@ -126,7 +127,7 @@ image_flag() {
 agent_filter='name=^dev-agent-(codex|claude|bash|tmux)-[0-9]+$'
 
 kill_all() {
-    local ids reply
+    local ids id reply
 
     ids=$(docker ps -q --filter "$agent_filter")
     [[ -n "$ids" ]] || { echo "dev-agent: no containers running" >&2; exit 0; }
@@ -137,8 +138,18 @@ kill_all() {
     read -r -p "Kill these containers? [y/N] " reply
     [[ "$reply" == [yY]* ]] || exit 1
 
+    # SIGINT to the agents first, wherever they sit in the process tree -
+    # under bash or tmux they are not PID 1 - so each gets to print its
+    # resume hint on its own terminal before the container goes.
+    for id in $ids; do
+        docker exec "$id" pkill -INT -x 'claude|codex' >/dev/null 2>&1 &
+    done
+    wait
+    sleep 3
+
+    ids=$(docker ps -q --filter "$agent_filter")
     # shellcheck disable=SC2086
-    docker kill $ids >/dev/null
+    [[ -z "$ids" ]] || docker kill $ids >/dev/null
     exit 0
 }
 
