@@ -2,6 +2,7 @@
 <meta charset="utf-8">
 <title>dev-agent proxy</title>
 <link rel="icon" href="data:,">
+<link rel="manifest" href="manifest.json">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!--
   The web UI of SPEC section 12: three panes, no build step. Vue is the global
@@ -187,6 +188,8 @@
     <span class="row">
       <button class="danger" @click="power('shutdown')">Shutdown</button>
       <button @click="power('restart')">Restart</button>
+      <!-- Only offered by Chromium, and only until the UI is installed. -->
+      <button v-if="installable" @click="install">Install app</button>
     </span>
     <!-- A bleat per request that gets halted, for an operator who is looking
          at another window rather than at this tab's favicon. -->
@@ -527,6 +530,12 @@ const zapMs = r => Math.min(Math.max((r.ms || 0) - (r.held_ms || 0), 100), 3000)
 // Browsers refuse to play sound on a page nobody has clicked yet; that refusal
 // goes to the console rather than nowhere, so a silent sheep can say why.
 const baa = new Audio('baa.wav');
+
+// Chromium's offer to install the UI as an app, held for the header button.
+// Caught up here because it can fire before the app has mounted.
+let installPrompt = null;
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; });
+navigator.serviceWorker?.register('sw.js');
 let baasOwed = 0;
 const playBaa = () => baa.play().catch(e => {
   baasOwed = 0;
@@ -573,7 +582,7 @@ const app = Vue.createApp({
     // lengths of the blinks still owed, and `zapTimer` the blinking chain,
     // null while idle.
     zap: false, zaps: [], zapTimer: null,
-    mode: '', rulesets: [], pending: [], log: [], total: 0, open: null, connected: false,
+    mode: '', rulesets: [], pending: [], log: [], total: 0, open: null, connected: false, installable: false,
     agents: [],
     fetchedAt: Date.now(), now: Date.now(), newRuleset: '', error: '',
     paint: null,
@@ -655,6 +664,9 @@ const app = Vue.createApp({
   },
 
   async mounted() {
+    this.installable = !!installPrompt;
+    window.addEventListener('beforeinstallprompt', () => { this.installable = true; });
+    window.addEventListener('appinstalled', () => { this.installable = false; });
     await Promise.all([this.loadPolicy(), this.loadLog(), this.loadPending()]);
     this.stream();
     // A drag ends wherever the button comes up, which is often outside the row
@@ -748,6 +760,10 @@ const app = Vue.createApp({
       else if (this.pending.length) bleat(this.baas);
     },
     hush,
+    async install() {
+      installPrompt.prompt();
+      if ((await installPrompt.userChoice).outcome === 'accepted') this.installable = false;
+    },
 
     stream() {
       const events = new EventSource('/api/events');
