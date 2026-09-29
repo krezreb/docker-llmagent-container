@@ -43,6 +43,8 @@ def main() -> None:
 
     # No path: memory only, as before.
     assert Log().file is None
+    # Neither the cut-off line nor the blank one is counted.
+    assert second.total() == 4, second.total()
 
     purge(path)
 
@@ -58,6 +60,7 @@ def purge(path: str) -> None:
 
     dropped = log.purge("2026-09-18T10:22:35.000Z")
     assert dropped == 3, dropped
+    assert log.total() == 2, log.total()
     assert [r["ts"] for r in log.ring] == ["2026-09-18T10:22:40.000Z"]
     assert lines(path) == ["2026-09-18T10:22:40.000Z"]
     # The rotated file is pruned too: rotation can leave records in it that are

@@ -311,7 +311,8 @@ class LogTail(Base):
                     host=self.get_argument("host", None),
                     cat=self.get_argument("cat", None),
                     decision=self.get_argument("decision", None),
-                )
+                ),
+                "total": self.ctx.log.total(),
             }
         )
 

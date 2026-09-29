@@ -33,6 +33,7 @@ class Log:
         self.ring: deque[dict] = deque(maxlen=ring)
         self.subscribers: set[asyncio.Queue] = set()
         self.file = None
+        self.path = path
         if path:
             handler = logging.handlers.RotatingFileHandler(
                 path, maxBytes=ROTATE, backupCount=1
@@ -93,7 +94,7 @@ class Log:
             finally:
                 handler.release()
         dropped = before_count - len(self.ring)
-        self.event("purge", {"before": before, "dropped": dropped})
+        self.event("purge", {"before": before, "dropped": dropped, "total": self.total()})
         return dropped
 
     @staticmethod
@@ -132,7 +133,21 @@ class Log:
     def unsubscribe(self, queue: asyncio.Queue) -> None:
         self.subscribers.discard(queue)
 
-    def tail(self, since=None, host=None, cat=None, decision=None, limit=500) -> list[dict]:
+    def total(self) -> int:
+        """How many records are on disk, both files: the ring only holds the
+        newest RING. A blank line, or one cut off by a kill, is not counted."""
+        if not self.path:
+            return len(self.ring)
+        count = 0
+        for name in (self.path, self.path + ".1"):
+            try:
+                with open(name, "rb") as f:
+                    count += sum(1 for line in f if line.endswith(b"}\n"))
+            except FileNotFoundError:
+                continue
+        return count
+
+    def tail(self, since=None, host=None, cat=None, decision=None, limit=RING) -> list[dict]:
         out = []
         for rec in reversed(self.ring):
             if since and rec["ts"] <= since:
