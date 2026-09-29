@@ -56,6 +56,9 @@ Options:
                 Run this image instead of $DEV_AGENT_IMAGE, 'default_image:'
                 in config.yml, or dev-agent:ubuntu26. A bare variant name
                 such as 'full' means dev-agent:full.
+    --kill-all  Kill every running dev-agent container, after asking, and
+                exit. The agents get SIGINT first and 3 seconds to print
+                their resume hints. The proxy is left running.
 
 Options may be given before the command or before the directory; everything
 from the directory on goes to the agent.
@@ -74,6 +77,7 @@ Examples:
     dev-agent --host-network codex ~/src/foo
     dev-agent --proxy claude ~/src/foo
     dev-agent --image full claude ~/src/foo
+    dev-agent --kill-all
 EOF
     exit 2
 }
@@ -117,6 +121,38 @@ image_flag() {
     [[ "$IMAGE" == *[:/]* ]] || IMAGE="dev-agent:$IMAGE"
 }
 
+# Agent containers are named dev-agent-<command>-<pid> below; the proxy's
+# dev-agent-proxy does not match. Each wrapper's EXIT trap removes its own
+# network once its container is gone.
+agent_filter='name=^dev-agent-(codex|claude|bash|tmux)-[0-9]+$'
+
+kill_all() {
+    local ids id reply
+
+    ids=$(docker ps -q --filter "$agent_filter")
+    [[ -n "$ids" ]] || { echo "dev-agent: no containers running" >&2; exit 0; }
+
+    docker ps --filter "$agent_filter" \
+        --format '{{.Names}}\t{{.Image}}\t{{.RunningFor}}' >&2
+
+    read -r -p "Kill these containers? [y/N] " reply
+    [[ "$reply" == [yY]* ]] || exit 1
+
+    # SIGINT to the agents first, wherever they sit in the process tree -
+    # under bash or tmux they are not PID 1 - so each gets to print its
+    # resume hint on its own terminal before the container goes.
+    for id in $ids; do
+        docker exec "$id" pkill -INT -x 'claude|codex' >/dev/null 2>&1 &
+    done
+    wait
+    sleep 3
+
+    ids=$(docker ps -q --filter "$agent_filter")
+    # shellcheck disable=SC2086
+    [[ -z "$ids" ]] || docker kill $ids >/dev/null
+    exit 0
+}
+
 # Reads the leading wrapper options out of "$@" and reports in
 # 'flags_consumed' how many of them the caller should shift away.
 take_flags() {
@@ -129,6 +165,7 @@ take_flags() {
             --workspace) mirror=""; mirror_asked="" ;;
             --host-network) host_net=1 ;;
             --proxy)     proxy=1 ;;
+            --kill-all)  kill_all ;;
             --image)
                 image_flag "${2:-}"
                 shift
