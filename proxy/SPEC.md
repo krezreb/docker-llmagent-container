@@ -665,6 +665,7 @@ half-written by a kill is skipped.
 | `bytes_up`, `bytes_down` | Body bytes, excluding headers |
 | `ms` | Total request duration |
 | `held_ms` | Time spent waiting for a human; `0` when not held |
+| `body`, `body_truncated` | Only while body capture is on (`PUT /api/capture`, off at every start): the request body, decoded and cut to 128 KB, and whether it was cut. Absent otherwise |
 
 ### 10.1 Resolving `client`
 

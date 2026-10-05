@@ -25,15 +25,19 @@
     }
   }
   * { box-sizing: border-box; }
+  /* Fixed to the viewport, so it stays in the corner as the page scrolls. The
+     sticky header paints the same image over its own background, so the
+     corner is not covered by it. */
+  body, header { background: url(bg.png) no-repeat left top fixed, var(--bg); }
   body {
-    margin: 0; background: var(--bg); color: var(--fg);
+    margin: 0; color: var(--fg);
     font: 14px/1.45 system-ui, sans-serif;
   }
   header {
     display: flex; flex-wrap: wrap; gap: 1rem; align-items: baseline;
     justify-content: center; padding: .7rem 1rem;
     border-bottom: 1px solid var(--line);
-    position: sticky; top: 0; background: var(--bg); z-index: 2;
+    position: sticky; top: 0; z-index: 2;
   }
   h1 { font-size: 1rem; margin: 0; font-weight: 600; }
   h2 { font-size: .85rem; margin: 0 0 .5rem; text-transform: uppercase;
@@ -156,13 +160,18 @@
        that takes the class off after the animation would have ended. */
     tr.hit > td, .flash { animation: none; background: var(--hit); }
   }
+  /* The expanded log row: the record, and beside it the body when one was
+     captured. min-width lets a long line scroll inside its pre. */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+  .split > * { min-width: 0; }
+  pre.body { white-space: pre-wrap; word-break: break-all; max-height: 60vh; overflow-y: auto; }
   .save { display: inline-flex; gap: .4rem; align-items: center; padding: .2rem .5rem;
           border: 1px dashed var(--line); border-radius: 6px; }
 </style>
 
 <div id="app">
   <header>
-    <h1>dev-agent proxy</h1>
+    <h1></h1>
     <span class="pills">
       <button v-for="m in modes" :key="m.value" class="pill"
               :class="{on: mode === m.value}" @click="setMode(m.value)"
@@ -276,6 +285,9 @@
           <option v-for="n in caps" :key="n" :value="n">{{ n }} rows</option>
         </select>
         <span class="dim">{{ shown.length }} of {{ matching }}</span>
+        <label title="Record request bodies (first 128 KB) in the log, log.jsonl included">
+          <input type="checkbox" :checked="capture" @change="setCapture">
+          capture bodies</label>
         <span class="dim" style="margin-left:auto">purge</span>
         <button v-for="p in purges" :key="p.seconds" :disabled="!log.length"
                 :class="{danger: !p.seconds}" :title="p.title"
@@ -342,7 +354,14 @@
                 <button class="plain" title="open this rule in the rulesets below"
                         @click="jumpToRule(rec)">show rule</button>
               </div>
-              <pre>{{ pretty(rec) }}</pre>
+              <div :class="{split: rec.body != null}">
+                <pre>{{ pretty(rec) }}</pre>
+                <div v-if="rec.body != null">
+                  <span class="dim">request body<template
+                    v-if="rec.body_truncated">, first 128 KB shown</template></span>
+                  <pre class="body">{{ prettyBody(rec.body) }}</pre>
+                </div>
+              </div>
             </td>
           </tr>
         </template>
@@ -575,6 +594,7 @@ const app = Vue.createApp({
     zap: false, zaps: [], zapTimer: null,
     mode: '', rulesets: [], pending: [], log: [], total: 0, open: null, connected: false,
     agents: [],
+    capture: false,
     fetchedAt: Date.now(), now: Date.now(), newRuleset: '', error: '',
     paint: null,
     // The rule being dragged, and the row it is over just now.
@@ -655,7 +675,8 @@ const app = Vue.createApp({
   },
 
   async mounted() {
-    await Promise.all([this.loadPolicy(), this.loadLog(), this.loadPending()]);
+    await Promise.all([this.loadPolicy(), this.loadLog(), this.loadPending(),
+                       api('/api/capture').then(c => { this.capture = c.capture; })]);
     this.stream();
     // A drag ends wherever the button comes up, which is often outside the row
     // it started in and sometimes outside the table.
@@ -777,7 +798,11 @@ const app = Vue.createApp({
       for (const kind of ['pending', 'resolved']) {
         events.addEventListener(kind, () => this.loadPending());
       }
-      events.addEventListener('state', () => this.loadPolicy());
+      events.addEventListener('state', e => {
+        const state = JSON.parse(e.data);
+        if ('capture' in state) this.capture = state.capture;
+        else this.loadPolicy();
+      });
       events.addEventListener('agents', e => { this.agents = JSON.parse(e.data); });
       events.addEventListener('purge', e => {
         const {before, total} = JSON.parse(e.data);
@@ -805,8 +830,16 @@ const app = Vue.createApp({
     // `rule` is left out: it is in the decision column of the row above, and
     // in the line this panel opens with, so a third copy is only noise.
     pretty(record) {
-      const {rule, ...rest} = record;
+      // The body has its own column beside this one.
+      const {rule, body, body_truncated, ...rest} = record;
       return JSON.stringify(rest, null, 2);
+    },
+
+    prettyBody(text) {
+      try { return JSON.stringify(JSON.parse(text), null, 2); } catch { return text; }
+    },
+    async setCapture(event) {
+      this.capture = (await put('/api/capture', {capture: event.target.checked})).capture;
     },
 
     // A rule label is `<file>:<note>` when a ruleset decided the request, and

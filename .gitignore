@@ -1,5 +1,5 @@
 __pycache__/
 *.py[cod]
-
+.claude/worktrees
 # Your own local variants; see README.md.
 images/custom*.Dockerfile

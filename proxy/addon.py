@@ -40,6 +40,8 @@ change the policy from in here. A human can, at http://127.0.0.1:8099 — asking
 them is the right next step.
 """
 
+BODY_MAX = 128 * 1024  # what is kept of one request body
+
 
 def setup_state() -> None:
     """Lay out /state, and set the modes an agent container depends on.
@@ -99,6 +101,9 @@ class Ctx:
         self.trusted = None  # set in running(), once there is a route table
         self.agents: dict[str, float] = {}  # last heartbeat, by container name
         self.roster: list[str] = []         # what the UIs were last told
+        # Whether request bodies go into the record. Off on every start: a
+        # body can carry credentials, and it lands in log.jsonl.
+        self.capture = False
 
 
 class EgressProxy:
@@ -206,6 +211,17 @@ class EgressProxy:
             decision=action, rule=rule, held_ms=held_ms,
             client=self._client(flow.client_conn),
         )
+        # After the decision, so a denied request's body is kept too: what an
+        # agent tried to send is the interesting part of a deny.
+        # ponytail: up to BODY_MAX per record, in the ring, the file and every
+        # UI's copy alike — 5000 full bodies is ~640MB. Cap the ring's share if
+        # capture is ever left on for long.
+        if self.ctx.capture and flow.request.raw_content:
+            data = flow.request.get_content(strict=False)
+            flow.metadata["body"] = {
+                "body": data[:BODY_MAX].decode("utf-8", "replace"),
+                "body_truncated": len(data) > BODY_MAX,
+            }
 
         if action == "deny":
             self.deny(flow, host, rule, cat=cat, held_ms=held_ms,
@@ -245,6 +261,7 @@ class EgressProxy:
                 host=host, port=flow.request.port, path=flow.request.path,
                 status=403, cat=cat, decision="deny", rule=rule,
                 bytes_down=len(body), held_ms=held_ms,
+                **flow.metadata.get("body", {}),
             )
         )
 
@@ -267,6 +284,7 @@ class EgressProxy:
                 bytes_down=len(flow.response.raw_content or b""),
                 ms=int((time.time() - started) * 1000),
                 held_ms=flow.metadata.get("held_ms", 0),
+                **flow.metadata.get("body", {}),
             )
         )
 
@@ -288,6 +306,7 @@ class EgressProxy:
                 bytes_up=len(flow.request.raw_content or b""),
                 ms=int((time.time() - started) * 1000),
                 held_ms=flow.metadata.get("held_ms", 0),
+                **flow.metadata.get("body", {}),
             )
         )
 

@@ -281,6 +281,19 @@ class Rules(Base):
         self.write({"ok": True, "deleted": index})
 
 
+class Capture(Base):
+    """Whether request bodies go into the record. Operator only, both ways:
+    a body can carry credentials."""
+
+    def get(self):
+        self.write({"capture": self.ctx.capture})
+
+    def put(self):
+        self.ctx.capture = bool(self.body().get("capture"))
+        self.ctx.log.event("state", {"capture": self.ctx.capture})
+        self.write({"capture": self.ctx.capture})
+
+
 class Pending(Base):
     def get(self):
         self.write({"pending": self.ctx.policy.pending.as_json()})
@@ -433,6 +446,7 @@ class Index(tornado.web.RequestHandler):
             "  DELETE /api/rulesets/<file>/rules?index=0\n"
             "  GET  /api/pending       POST /api/pending/<key> {\"decision\": \"allow\"}\n"
             "  GET  /api/log           DELETE /api/log?seconds=3600\n"
+            "  GET  /api/capture       PUT {\"capture\": true}\n"
             "  POST /api/heartbeat     (from an agent container, every 60s)\n"
             "  GET  /api/events (SSE)\n"
             "  POST /api/shutdown      POST /api/restart\n"
@@ -449,6 +463,7 @@ def serve(ctx) -> None:
             (r"/api/rulesets", Rulesets, args),
             (r"/api/rulesets/([^/]+)", Rulesets, args),
             (r"/api/rulesets/([^/]+)/rules", Rules, args),
+            (r"/api/capture", Capture, args),
             (r"/api/pending", Pending, args),
             (r"/api/pending/([^/]+)", Pending, args),
             (r"/api/heartbeat", Heartbeat, args),
