@@ -60,6 +60,7 @@
   button:hover { border-color: var(--accent); }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button.danger { color: var(--deny); }
+  button.solid { background: var(--c); border-color: var(--c); color: #fff; }
   input, select { font: inherit; padding: .25rem .4rem; border: 1px solid var(--line);
                   border-radius: 4px; background: var(--bg); color: var(--fg); }
   table { width: 100%; border-collapse: collapse; }
@@ -240,16 +241,16 @@
           <td class="dim mono">{{ p.clients.join(', ') }}</td>
           <td class="mono">{{ elapsed(p) }}s</td>
           <td class="row">
-            <button class="primary" @click="resolve(p, 'allow')">Allow once</button>
-            <button class="danger" @click="resolve(p, 'deny')">Deny once</button>
+            <button class="solid" style="--c: #00398f" @click="resolve(p, 'allow')">Allow once</button>
+            <button class="solid" style="--c: #a34d00" @click="resolve(p, 'deny')">Deny once</button>
             <!-- One ruleset and one scope for both saves: the choice is where
                  the rule goes and how wide it is, which is the same question
                  whichever way the answer falls. -->
             <span class="save">
-              <button v-if="p.disabled_allow" @click="resolve(p, 'allow', false, true)">
+              <button v-if="p.disabled_allow" class="solid" style="--c: #00870c" @click="resolve(p, 'allow', false, true)">
                 Allow and enable rule</button>
-              <button v-else @click="resolve(p, 'allow', true)">Always Allow</button>
-              <button class="danger" @click="resolve(p, 'deny', true)">Always Deny</button>
+              <button v-else class="solid" style="--c: #00870c" @click="resolve(p, 'allow', true)">Always Allow</button>
+              <button class="solid" style="--c: #c4281b" @click="resolve(p, 'deny', true)">Always Deny</button>
               <select v-model="p.scope">
                 <option value="host">host</option>
                 <option value="host+path">host+path</option>
