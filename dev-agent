@@ -8,16 +8,26 @@ config="${DEV_AGENT_CONFIG:-$HOME/.config/dev-agent/config.yml}"
 # one of ours: 'full' means dev-agent:full.
 default_image=""
 
-if [[ -f "$config" ]]; then
-    default_image=$(awk '
-        /^default_image:/ {
-            sub(/^default_image:[[:space:]]*/, "")
+# Wrapper options read before the command line's, so the command line wins:
+# 'default_flags: --proxy' turns the proxy on, --no-proxy turns it off again.
+default_flags=""
+
+# Prints the value of a top-level 'key: value' line of the config file.
+config_value() {
+    awk -v key="$1" '
+        index($0, key ":") == 1 {
+            sub(/^[^:]*:[[:space:]]*/, "")
             sub(/[[:space:]]*(#.*)?$/, "")
             gsub(/^["\047]|["\047]$/, "")
             print
             exit
         }
-    ' "$config")
+    ' "$config"
+}
+
+if [[ -f "$config" ]]; then
+    default_image=$(config_value default_image)
+    default_flags=$(config_value default_flags)
 fi
 
 if [[ -n "$default_image" && "$default_image" != *[:/]* ]]; then
@@ -52,6 +62,8 @@ Options:
                 already running; its web UI is at http://127.0.0.1:8099.
                 Log in once with --host-network first: the OAuth callback
                 cannot reach a container on an internal network.
+    --no-proxy  Undo --proxy, such as one from 'default_flags:' in
+                config.yml.
     --image NAME
                 Run this image instead of $DEV_AGENT_IMAGE, 'default_image:'
                 in config.yml, or dev-agent:ubuntu26. A bare variant name
@@ -174,6 +186,7 @@ take_flags() {
             --workspace) mirror=""; mirror_asked="" ;;
             --host-network) host_net=1 ;;
             --proxy)     proxy=1 ;;
+            --no-proxy)  proxy="" ;;
             --kill-all)  kill_all ;;
             --image)
                 image_flag "${2:-}"
@@ -188,6 +201,9 @@ take_flags() {
         flags_consumed=$((flags_consumed + 1))
     done
 }
+
+read -ra defaults <<<"$default_flags"
+set -- "${defaults[@]}" "$@"
 
 take_flags "$@"
 shift "$flags_consumed"
@@ -219,7 +235,7 @@ shift "$flags_consumed"
 # container, and --host-network skips that network, so the pair would leave
 # every request pointed at a name that does not resolve.
 [[ -n "$proxy" && -n "$host_net" ]] &&
-    die "--proxy and --host-network cannot be combined"
+    die "--proxy and --host-network cannot be combined (add --no-proxy if --proxy comes from default_flags)"
 
 # The hostname mirrors the image, so the shell prompt names the variant you are
 # in. A hostname may only hold alphanumerics and hyphens, so the ':' of the tag

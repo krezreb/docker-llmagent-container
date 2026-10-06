@@ -4,6 +4,10 @@
 # variant name such as "full" means dev-agent:full.
 # default_image: dev-agent:ubuntu26
 
+# Options applied before the command line's, which can override them
+# (--no-proxy undoes --proxy).
+# default_flags: --proxy
+
 # Extra host paths to expose inside the container, one per line, as
 #   - source:destination[:ro]
 # "~" is expanded. The source must already exist.

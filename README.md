@@ -460,6 +460,14 @@ Toolchain caches such as `~/.cargo`, `~/.m2` or `~/go` land in the shared home a
 
 ## Configuration
 
+To pass options on every run, list them in `~/.config/dev-agent/config.yml`.
+They go before the command line's, so the command line can override them;
+`--no-proxy` undoes a default `--proxy` for a `--host-network` login:
+
+```yaml
+default_flags: --proxy
+```
+
 `~/.config/dev-agent/config.yml` lists extra host paths to expose, one per line:
 
 ```yaml
