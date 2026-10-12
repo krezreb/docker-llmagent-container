@@ -143,8 +143,10 @@ class EgressProxy:
                 None, socket.gethostbyaddr, ip
             )
             # docker answers with the network appended; a container name
-            # cannot contain a dot, so the first label is exact.
-            self.clients[client.id] = name[0].split(".")[0]
+            # cannot contain a dot, so the first label is exact. Under
+            # --dind the agent shares its docker sidecar's address, and the
+            # sidecar is the agent's name plus -dind.
+            self.clients[client.id] = name[0].split(".")[0].removesuffix("-dind")
         except (OSError, socket.herror):
             pass
 

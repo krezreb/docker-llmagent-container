@@ -57,6 +57,12 @@ RUN npm install -g \
     && npm cache clean --force \
     && npm ls -g --depth=0
 
+# The docker client, compose and buildx, for 'dev-agent --dind', whose sidecar
+# runs the daemon. Static binaries out of the official image, which needs no
+# apt repository for this release and leaves no daemon in this one.
+COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker:cli /usr/local/libexec/docker/cli-plugins/ /usr/local/libexec/docker/cli-plugins/
+
 RUN echo "alias ll='ls -alF'" >> /etc/bash.bashrc
 
 # The container runs as the host's uid, which the image knows as 'ubuntu', so

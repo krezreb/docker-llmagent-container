@@ -150,7 +150,7 @@ leaves docker's cache in charge and lets an offline build go through.
 ## Usage
 
 ```
-dev-agent [--ro] [--workspace] [--host-network] [codex|claude|bash|tmux] [directory] [agent arguments...]
+dev-agent [--ro] [--workspace] [--host-network] [--proxy] [--dind] [codex|claude|bash|tmux] [directory] [agent arguments...]
 ```
 
 `bash` drops you into a shell in the same sandbox, which is useful for
@@ -284,6 +284,51 @@ The alternatives loosen the outer layer to enable the inner one, which is a bad
 trade here: `--security-opt apparmor=unconfined` drops the container's AppArmor
 profile, and `sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` lifts
 the restriction for everything on the host, not just this container.
+
+## Docker inside the sandbox (`--dind`)
+
+Some work needs docker itself: a `docker compose up` for integration tests, an
+image to build, a database to throw away. `--dind` gives the agent a docker
+daemon of its own without handing it the host's:
+
+```sh
+dev-agent --dind claude ~/src/foo
+```
+
+The daemon runs in a sidecar container, `dev-agent-<command>-<pid>-dind`, and
+the agent's container stays exactly as hardened as without the flag. The agent
+joins the sidecar's network namespace and reaches the daemon at
+`DOCKER_HOST=tcp://127.0.0.1:2375`, which listens on loopback only: the
+containers the agent starts cannot reach it, nor can other agents. The sidecar
+is removed when the agent exits, and `--kill-all` reaps any left behind.
+
+**This loosens the isolation.** A docker daemon needs privileges the agent's
+container does not have. On a plain docker host the sidecar runs
+`--privileged`, and an agent that starts a privileged container of its own
+through it can mount the host's disks and become root on the host. If the
+host has [sysbox](https://github.com/nestybox/sysbox) installed, `dev-agent`
+uses its `sysbox-runc` runtime instead, which runs the daemon unprivileged and
+closes that path; without it, a warning is printed on every run. Use `--dind`
+for agents you would trust with the host's docker group, or install sysbox.
+
+What to expect inside:
+
+- **Bind mounts** work for the project: the sidecar mounts it at the same path,
+  so `docker run -v "$PWD":/src` sees it (read-only under `--ro`). Other paths
+  — `/tmp`, `/home/agent` — are the sidecar's own and empty.
+- **Published ports** land on the agent's `localhost`: after `docker run -p
+  8080:80 nginx`, `curl localhost:8080` works from the agent. The host cannot
+  reach them.
+- **No image cache** survives the session: each run starts with an empty
+  `/var/lib/docker`.
+- **Under `--proxy`**, the daemon pulls images through the proxy, which shows
+  them under the agent's name. The containers it starts have no route out,
+  and so no network beyond the proxy, and only if they are pointed at it with
+  `HTTP_PROXY` and trust its CA themselves.
+- Not with `--host-network`.
+
+The client, compose and buildx are in the base image; `DEV_AGENT_DIND_IMAGE`
+names a sidecar image other than `docker:dind`.
 
 ## Git worktrees
 

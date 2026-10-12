@@ -64,6 +64,12 @@ Options:
                 cannot reach a container on an internal network.
     --no-proxy  Undo --proxy, such as one from 'default_flags:' in
                 config.yml.
+    --dind      Give the agent a docker daemon of its own, in a sidecar
+                container, for docker run, build and compose. The sidecar is
+                privileged unless the host has the sysbox-runc runtime, and a
+                privileged sidecar is a way to root on this host for an agent
+                that looks for one. Not with --host-network.
+    --no-dind   Undo --dind, such as one from 'default_flags:'.
     --image NAME
                 Run this image instead of $DEV_AGENT_IMAGE, 'default_image:'
                 in config.yml, or dev-agent:ubuntu26. A bare variant name
@@ -89,6 +95,7 @@ Examples:
     dev-agent --workspace claude ~/src/foo
     dev-agent --host-network codex ~/src/foo
     dev-agent --proxy claude ~/src/foo
+    dev-agent --dind claude ~/src/foo
     dev-agent --image full claude ~/src/foo
     dev-agent --kill-all
 EOF
@@ -116,6 +123,10 @@ host_net=""
 # anything that is not HTTP or HTTPS.
 proxy=""
 
+# A docker daemon for the agent, in a sidecar whose network namespace the agent
+# joins. Off by default: the sidecar is privileged without sysbox.
+dind=""
+
 # The project is mirrored at its host path unless that is turned off, either
 # for one run with --workspace or for good with DEV_AGENT_MIRROR=0.
 mirror="${DEV_AGENT_MIRROR:-1}"
@@ -134,10 +145,12 @@ image_flag() {
     [[ "$IMAGE" == *[:/]* ]] || IMAGE="dev-agent:$IMAGE"
 }
 
-# Agent containers are named dev-agent-<command>-<pid> below; the proxy's
-# dev-agent-proxy does not match, and kill_proxy handles it. Each wrapper's EXIT trap removes its own
-# network once its container is gone.
-agent_filter='name=^dev-agent-(codex|claude|bash|tmux)-[0-9]+$'
+# Agent containers are named dev-agent-<command>-<pid> below, and their --dind
+# sidecars the same plus -dind; the proxy's dev-agent-proxy does not match, and
+# kill_proxy handles it. Each wrapper's EXIT trap removes its own sidecar and
+# network once its container is gone; matching the sidecars here reaps those
+# whose wrapper was killed too hard to run it.
+agent_filter='name=^dev-agent-(codex|claude|bash|tmux)-[0-9]+(-dind)?$'
 
 kill_all() {
     local ids id reply
@@ -187,6 +200,8 @@ take_flags() {
             --host-network) host_net=1 ;;
             --proxy)     proxy=1 ;;
             --no-proxy)  proxy="" ;;
+            --dind)      dind=1 ;;
+            --no-dind)   dind="" ;;
             --kill-all)  kill_all ;;
             --image)
                 image_flag "${2:-}"
@@ -236,6 +251,11 @@ shift "$flags_consumed"
 # every request pointed at a name that does not resolve.
 [[ -n "$proxy" && -n "$host_net" ]] &&
     die "--proxy and --host-network cannot be combined (add --no-proxy if --proxy comes from default_flags)"
+
+# Under --dind the agent joins the sidecar's network namespace, and it cannot
+# be in the host's at the same time.
+[[ -n "$dind" && -n "$host_net" ]] &&
+    die "--dind and --host-network cannot be combined (add --no-dind if --dind comes from default_flags)"
 
 # The hostname mirrors the image, so the shell prompt names the variant you are
 # in. A hostname may only hold alphanumerics and hyphens, so the ':' of the tag
@@ -590,6 +610,21 @@ fi
 
 container_name="dev-agent-${agent}-$$"
 
+# What the EXIT trap removes, set as each comes into existence: the sidecar
+# first, since it holds the agent network open, then the network.
+dind_name=""
+agent_net=""
+
+cleanup() {
+    [[ -z "$dind_name" ]] || docker rm --force "$dind_name" >/dev/null 2>&1
+    if [[ -n "$agent_net" ]]; then
+        docker network disconnect "$agent_net" dev-agent-proxy >/dev/null 2>&1
+        docker network rm --force "$agent_net" >/dev/null 2>&1
+    fi
+}
+
+trap cleanup EXIT
+
 workspace_mount="type=bind,src=${project},dst=${mountpoint}"
 
 if [[ -n "$ro" ]]; then
@@ -643,13 +678,15 @@ docker_args=(
 
 )
 
-# docker refuses --hostname together with --network host: the namespace it
-# joins already has one.
+# docker refuses --hostname together with --network host, or with the
+# sidecar's namespace under --dind: the namespace it joins already has one.
 if [[ -n "$host_net" ]]; then
     docker_args+=(--network host)
-else
+elif [[ -z "$dind" ]]; then
     docker_args+=(--hostname "$hostname")
+fi
 
+if [[ -z "$host_net" ]]; then
     #
     # One internal network per container, in place of the default bridge, with
     # the proxy attached to it.
@@ -678,22 +715,109 @@ else
         docker network create --internal "$agent_net" >/dev/null ||
             die "could not create the agent network $agent_net"
 
-        # Removed on the way out rather than left for the next run to reap,
-        # so that 'docker network ls' is not a list of dead sessions.
-        trap 'docker network disconnect "$agent_net" dev-agent-proxy >/dev/null 2>&1
-              docker network rm --force "$agent_net" >/dev/null 2>&1' EXIT
-
         docker network connect "$agent_net" dev-agent-proxy ||
             die "could not attach the proxy to $agent_net"
 
-        docker_args+=(--network "$agent_net")
+        [[ -n "$dind" ]] || docker_args+=(--network "$agent_net")
     fi
+fi
+
+#
+# Docker in docker.
+#
+# The daemon runs in a sidecar, never in the agent's own container, which keeps
+# every restriction above: read-only root, no capabilities, no new privileges.
+# The agent joins the sidecar's network namespace, which makes the daemon's
+# loopback-only port the agent's own 127.0.0.1:2375 - unreachable from the
+# containers it starts and from every other agent - and puts a port the agent
+# publishes on its own localhost. The sidecar takes over the hostname and the
+# agent network, since docker refuses both on a container that shares another's
+# namespace.
+#
+# The project is mounted in the sidecar at the same path, so 'docker run -v
+# "$PWD":/src' finds it. Nothing else of the agent's is there: a bind mount of
+# /tmp or of the home directory gets the sidecar's, which is empty.
+#
+# /var/lib/docker is the image's anonymous volume, removed with the sidecar, so
+# each session pulls its images afresh.
+#
+if [[ -n "$dind" ]]; then
+    dind_name="${container_name}-dind"
+    dind_args=(
+        run --detach --rm
+        --name "$dind_name"
+        --hostname "$hostname"
+
+        # The image's dind script mounts a tmpfs over /tmp when nothing is
+        # mounted there yet, which would hide a project mirrored under /tmp.
+        --tmpfs /tmp
+        --mount "$workspace_mount"
+    )
+
+    # sysbox runs a docker daemon without --privileged, and without a way out
+    # of it. Plain runc needs --privileged, and a privileged container can
+    # mount the host's disks: anything the agent runs with --privileged in
+    # turn can do the same.
+    if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"sysbox-runc"'; then
+        dind_args+=(--runtime=sysbox-runc)
+    else
+        dind_args+=(--privileged)
+        cat >&2 <<'EOF'
+dev-agent: --dind without sysbox: the docker sidecar is privileged, and an agent
+           that runs a privileged container of its own can reach root on this
+           host. Install sysbox (https://github.com/nestybox/sysbox) to close it.
+EOF
+    fi
+
+    if [[ -n "$proxy" ]]; then
+        # dockerd pulls through the proxy, trusting its CA. The containers it
+        # starts get neither: they sit on the same internal network with no
+        # route out, so they have no egress unless they are pointed at the
+        # proxy themselves.
+        dind_args+=(
+            --network "$agent_net"
+            --env "HTTP_PROXY=http://dev-agent-proxy:3128"
+            --env "HTTPS_PROXY=http://dev-agent-proxy:3128"
+            --env "NO_PROXY=localhost,127.0.0.1"
+            --mount "type=bind,src=${ca_dir}/bundle.crt,dst=/etc/ssl/certs/ca-certificates.crt,readonly"
+        )
+    fi
+
+    # Naming dockerd keeps the image's entrypoint from adding its own default
+    # of tcp://0.0.0.0:2375, which every container inside could reach.
+    dind_args+=(
+        "${DEV_AGENT_DIND_IMAGE:-docker:dind}"
+        dockerd
+        --host=unix:///var/run/docker.sock
+        --host=tcp://127.0.0.1:2375
+    )
+
+    # Same reason as the network: a sidecar left by a run killed hard, under a
+    # PID that has come round again.
+    docker rm --force "$dind_name" >/dev/null 2>&1
+
+    docker "${dind_args[@]}" >/dev/null ||
+        die "could not start the docker sidecar $dind_name"
+
+    # A few seconds for the daemon to come up, polled the way the CA is above.
+    for _ in $(seq 300); do
+        docker exec "$dind_name" docker version >/dev/null 2>&1 && break
+        sleep 0.1
+    done
+
+    docker exec "$dind_name" docker version >/dev/null 2>&1 ||
+        die "the docker daemon in $dind_name did not come up; see 'docker logs $dind_name'"
+
+    docker_args+=(
+        --network "container:${dind_name}"
+        --env DOCKER_HOST=tcp://127.0.0.1:2375
+    )
 fi
 
 docker_args+=("${proxy_args[@]}")
 docker_args+=("${extra_mounts[@]}")
 docker_args+=("$IMAGE" "$agent" "$@")
 
-# Not exec'd: the EXIT trap that removes the agent network has to outlive
+# Not exec'd: the EXIT trap that removes the sidecar and network has to outlive
 # docker run. The exit status is docker's either way.
 docker "${docker_args[@]}"

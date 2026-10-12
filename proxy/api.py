@@ -384,7 +384,7 @@ class Heartbeat(Base):
         try:
             name = (await asyncio.get_running_loop().run_in_executor(
                 None, socket.gethostbyaddr, ip
-            ))[0].split(".")[0]
+            ))[0].split(".")[0].removesuffix("-dind")  # see addon.client_connected
         except (OSError, socket.herror):
             name = ip
         self.ctx.agents[name] = time.monotonic()
