@@ -89,6 +89,10 @@
   }
   .truncate { max-width: 34rem; overflow: hidden; text-overflow: ellipsis;
               white-space: nowrap; }
+  /* The request column takes whatever the other columns leave and never more,
+     so a long URL is cut short instead of pushing the buttons off the right. */
+  td.req { width: 100%; max-width: 0; overflow-wrap: anywhere; }
+  td.req .truncate { display: block; max-width: none; }
   .pills { display: inline-flex; border: 1px solid var(--line); border-radius: 999px;
            overflow: hidden; }
   .pill { border: 0; border-radius: 0; padding: .25rem .8rem; background: transparent;
@@ -227,8 +231,8 @@
         <tbody>
         <tr><th>request</th><th>category</th><th>client</th><th>waiting</th><th></th></tr>
         <tr v-for="p in pending" :key="p.key">
-          <td class="mono">
-            {{ p.method || 'CONNECT' }} <span class="truncate">{{ p.url }}</span>
+          <td class="mono req">
+            <div class="truncate" :title="p.url">{{ p.method || 'CONNECT' }} {{ p.url }}</div>
             <span v-if="p.waiters > 1" class="tag">{{ p.waiters }} waiters</span>
             <!-- A rule for this already exists, switched off; say so, so the
                  answer is to switch it on rather than to write a second one. -->
