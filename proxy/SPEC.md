@@ -661,6 +661,7 @@ half-written by a kill is skipped.
 | `cat` | Category from section 9 |
 | `decision` | `allow`, `deny`, `tunnel` |
 | `rule` | `<ruleset file>:<note>`, or `mode:<mode>` when the default decided, or `pending:<decision>` when a human did |
+| `rule_match`, `rule_path` | The `match` and `path` of the rule that decided, so the UI can find it whatever has moved around it since; `null` when no rule did, and `rule_path` `null` for a rule without one |
 | `mode` | Mode in force at decision time |
 | `bytes_up`, `bytes_down` | Body bytes, excluding headers |
 | `ms` | Total request duration |

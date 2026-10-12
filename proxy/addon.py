@@ -162,7 +162,7 @@ class EgressProxy:
         """A `tunnel` rule skips interception, for pinned clients. Only the
         host is known here, so a rule carrying a path cannot match."""
         host = data.client_hello.sni or data.context.server.address[0]
-        action, rule = self.policy.decide(host, None)
+        action, rule, hit = self.policy.decide_rule(host, None)
         if action != "tunnel":
             return
         data.ignore_connection = True
@@ -171,7 +171,7 @@ class EgressProxy:
                 client=self._client(data.context.client),
                 method=None, scheme="https", host=host,
                 port=data.context.server.address[1], path=None,
-                decision="tunnel", rule=rule,
+                decision="tunnel", rule=rule, **_rule_fields(hit),
             )
             # ponytail: a tunnelled connection is recorded at the decision,
             # so bytes and duration stay 0 — counting them means tracking the
@@ -197,10 +197,11 @@ class EgressProxy:
         cat = self.policy.category(host)
         started = time.time()
 
-        action, rule = self.policy.decide(host, path)
+        action, rule, hit = self.policy.decide_rule(host, path)
         held_ms = 0
 
         if action == "pending":
+            hit = None  # a human decided, not a rule
             waited = time.time()
             action, rule = await self.policy.pending.ask(
                 flow.request.method, host, path, flow.request.pretty_url, cat,
@@ -211,7 +212,7 @@ class EgressProxy:
         flow.metadata.update(
             id=str(uuid.uuid4()), started=started, cat=cat,
             decision=action, rule=rule, held_ms=held_ms,
-            client=self._client(flow.client_conn),
+            client=self._client(flow.client_conn), **_rule_fields(hit),
         )
         # After the decision, so a denied request's body is kept too: what an
         # agent tried to send is the interesting part of a deny.
@@ -236,7 +237,8 @@ class EgressProxy:
             "ts": now(), "id": str(uuid.uuid4()), "client": None,
             "method": None, "scheme": None, "host": None, "port": None,
             "path": None, "status": None, "cat": None, "decision": None,
-            "rule": None, "mode": self.policy.mode,
+            "rule": None, "rule_match": None, "rule_path": None,
+            "mode": self.policy.mode,
             "bytes_up": 0, "bytes_down": 0, "ms": 0, "held_ms": 0,
         }
         rec.update(kw)
@@ -262,6 +264,8 @@ class EgressProxy:
                 method=flow.request.method, scheme=flow.request.scheme,
                 host=host, port=flow.request.port, path=flow.request.path,
                 status=403, cat=cat, decision="deny", rule=rule,
+                rule_match=flow.metadata.get("rule_match"),
+                rule_path=flow.metadata.get("rule_path"),
                 bytes_down=len(body), held_ms=held_ms,
                 **flow.metadata.get("body", {}),
             )
@@ -282,6 +286,8 @@ class EgressProxy:
                 cat=flow.metadata.get("cat"),
                 decision=flow.metadata.get("decision", "allow"),
                 rule=flow.metadata.get("rule"),
+                rule_match=flow.metadata.get("rule_match"),
+                rule_path=flow.metadata.get("rule_path"),
                 bytes_up=len(flow.request.raw_content or b""),
                 bytes_down=len(flow.response.raw_content or b""),
                 ms=int((time.time() - started) * 1000),
@@ -305,12 +311,19 @@ class EgressProxy:
                 cat=flow.metadata.get("cat"),
                 decision=flow.metadata.get("decision", "allow"),
                 rule=f"error:{flow.error.msg}" if flow.error else flow.metadata.get("rule"),
+                rule_match=flow.metadata.get("rule_match"),
+                rule_path=flow.metadata.get("rule_path"),
                 bytes_up=len(flow.request.raw_content or b""),
                 ms=int((time.time() - started) * 1000),
                 held_ms=flow.metadata.get("held_ms", 0),
                 **flow.metadata.get("body", {}),
             )
         )
+
+
+def _rule_fields(rule) -> dict:
+    """The decided rule's match and path, for the UI to find it by."""
+    return {"rule_match": rule and rule.match, "rule_path": rule and rule.path}
 
 
 addons = [EgressProxy()]

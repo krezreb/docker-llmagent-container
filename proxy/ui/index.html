@@ -889,13 +889,18 @@ const app = Vue.createApp({
       if (!ruleset) return;
       ruleset.open = true;
       if (!ruleset.detail.length) await this.loadRules(ruleset);
-      // The label carries the rule's note, not its index, so the row is found
-      // by the text the label was built from, and by the action, which the
-      // decision matches. Two rules written the same way: the first one wins,
-      // which is also the one the policy would have matched.
-      const index = ruleset.detail.findIndex(
-        rule => (rule.note || rule.match) === hit.rule && rule.action === record.decision
-      );
+      // Found by what the rule is — its match, path and action — not where it
+      // sits, so rules added or moved since cannot send this to the wrong row.
+      // Two rules written the same way: the first one switched on wins, which
+      // is the one the policy matched. A record logged before rule_match
+      // existed has only the label's note to go by, which rules saved from
+      // the UI all share.
+      const same = 'rule_match' in record
+        ? rule => rule.match === record.rule_match
+            && (rule.path ?? null) === record.rule_path && rule.action === record.decision
+        : rule => (rule.note || rule.match) === hit.rule && rule.action === record.decision;
+      let index = ruleset.detail.findIndex(rule => same(rule) && rule.enabled);
+      if (index < 0) index = ruleset.detail.findIndex(same);
       // A rule edited or deleted since the request was logged is no longer
       // findable; the ruleset it was in is still worth scrolling to.
       // Cleared first for the same reason openAndFlash clears it: the tint

@@ -491,11 +491,20 @@ class Policy:
 
     def decide(self, host: str, path: str | None) -> tuple[str, str]:
         """(action, rule label). action is allow, deny, tunnel or pending."""
+        return self.decide_rule(host, path)[:2]
+
+    def decide_rule(self, host: str, path: str | None) -> tuple[str, str, Rule | None]:
+        """decide(), plus the rule that decided — None when the mode did.
+
+        The label carries the note, which rules saved from the UI all share,
+        so the log keeps the rule's match and path too: what lets the UI find
+        the rule again, whatever has been added or moved around it since.
+        """
         self.reload()
         mode = self.mode
 
         if mode == "lockdown":
-            return "deny", "mode:lockdown"
+            return "deny", "mode:lockdown", None
 
         # Deny first, then tunnel, then allow: a deny in any enabled ruleset
         # cannot be overridden by an allow somewhere else. SPEC section 8.2.
@@ -508,11 +517,11 @@ class Policy:
                     if not rule.enabled:
                         continue
                     if rule.action == action and rule.matches(host, path):
-                        return action, f"{filename}:{rule.note or rule.match}"
+                        return action, f"{filename}:{rule.note or rule.match}", rule
 
         if mode in ("default-allow", "log-only"):
-            return "allow", f"mode:{mode}"
-        return "pending", f"mode:{mode}"
+            return "allow", f"mode:{mode}", None
+        return "pending", f"mode:{mode}", None
 
     def disabled_allow(self, host: str, path: str | None) -> dict | None:
         """The first allow rule that would have matched, were it switched on.

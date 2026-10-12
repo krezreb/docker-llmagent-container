@@ -711,6 +711,19 @@ def test_a_disabled_ruleset_is_reported_and_switched_on_too():
     assert Policy(directory).decide("example.com", "/")[0] == "allow"
 
 
+def test_decide_rule_names_the_rule_behind_a_shared_note():
+    # Both rules label as "r.yml:saved from the UI"; only the rule tells them apart.
+    p = Policy(state({"r.yml": """
+rules:
+  - {match: github.com, path: "/anthropics/*", action: deny, note: saved from the UI}
+  - {match: api.github.com, action: deny, note: saved from the UI}
+"""}))
+    action, label, rule = p.decide_rule("api.github.com", "/repos/x/zipball/1")
+    assert (action, label) == ("deny", "r.yml:saved from the UI")
+    assert (rule.match, rule.path) == ("api.github.com", None)
+    assert p.decide_rule("nothing.example.com", "/")[2] is None
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for test in tests:
