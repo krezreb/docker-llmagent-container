@@ -150,7 +150,7 @@ leaves docker's cache in charge and lets an offline build go through.
 ## Usage
 
 ```
-dev-agent [--ro] [--workspace] [--host-network] [--proxy] [--dind] [codex|claude|bash|tmux] [directory] [agent arguments...]
+dev-agent [--ro] [--workspace] [--host-network] [--proxy] [--dind] [--gpu] [codex|claude|bash|tmux] [directory] [agent arguments...]
 ```
 
 `bash` drops you into a shell in the same sandbox, which is useful for
@@ -329,6 +329,27 @@ What to expect inside:
 
 The client, compose and buildx are in the base image; `DEV_AGENT_DIND_IMAGE`
 names a sidecar image other than `docker:dind`.
+
+## GPUs (`--gpu`)
+
+```sh
+dev-agent --gpu claude ~/src/foo
+```
+
+`--gpu` looks for the host's GPUs by their device nodes and exposes whatever it
+finds, failing if it finds none:
+
+- **NVIDIA** (`/dev/nvidiactl`): passed as `--gpus all`, which needs the
+  [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/)
+  on the host. The toolkit injects the driver libraries and `nvidia-smi`.
+- **AMD / ROCm** (`/dev/kfd`): `/dev/kfd` and `/dev/dri` are passed through,
+  and the container is added to the groups that own them (usually `video` and
+  `render`) by number, since it runs as your uid rather than root.
+
+The CUDA or ROCm userspace is not in the images; PyTorch wheels and the like
+bring their own. Under `--dind`, AMD devices are also passed to the sidecar, so
+`docker run --device /dev/kfd --device /dev/dri ...` works inside; NVIDIA GPUs
+reach the agent but not the containers it starts.
 
 ## Git worktrees
 

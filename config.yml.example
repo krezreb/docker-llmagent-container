@@ -5,7 +5,7 @@
 # default_image: dev-agent:ubuntu26
 
 # Options applied before the command line's, which can override them
-# (--no-proxy undoes --proxy, --no-dind undoes --dind).
+# (--no-proxy undoes --proxy, --no-dind undoes --dind, --no-gpu undoes --gpu).
 # default_flags: --proxy
 
 # Extra host paths to expose inside the container, one per line, as

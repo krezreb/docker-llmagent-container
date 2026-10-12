@@ -70,6 +70,11 @@ Options:
                 privileged sidecar is a way to root on this host for an agent
                 that looks for one. Not with --host-network.
     --no-dind   Undo --dind, such as one from 'default_flags:'.
+    --gpu       Expose the host's GPUs: NVIDIA through the nvidia container
+                toolkit, AMD (ROCm) as /dev/kfd and /dev/dri. Under --dind,
+                AMD devices are passed to the sidecar too, for nested
+                'docker run --device'.
+    --no-gpu    Undo --gpu, such as one from 'default_flags:'.
     --image NAME
                 Run this image instead of $DEV_AGENT_IMAGE, 'default_image:'
                 in config.yml, or dev-agent:ubuntu26. A bare variant name
@@ -96,6 +101,7 @@ Examples:
     dev-agent --host-network codex ~/src/foo
     dev-agent --proxy claude ~/src/foo
     dev-agent --dind claude ~/src/foo
+    dev-agent --gpu claude ~/src/foo
     dev-agent --image full claude ~/src/foo
     dev-agent --kill-all
 EOF
@@ -126,6 +132,10 @@ proxy=""
 # A docker daemon for the agent, in a sidecar whose network namespace the agent
 # joins. Off by default: the sidecar is privileged without sysbox.
 dind=""
+
+# The host's GPUs, NVIDIA or AMD, whichever are found. Off by default: the
+# device nodes are a kernel attack surface the agent otherwise never touches.
+gpu=""
 
 # The project is mirrored at its host path unless that is turned off, either
 # for one run with --workspace or for good with DEV_AGENT_MIRROR=0.
@@ -202,6 +212,8 @@ take_flags() {
             --no-proxy)  proxy="" ;;
             --dind)      dind=1 ;;
             --no-dind)   dind="" ;;
+            --gpu)       gpu=1 ;;
+            --no-gpu)    gpu="" ;;
             --kill-all)  kill_all ;;
             --image)
                 image_flag "${2:-}"
@@ -608,6 +620,34 @@ if [[ -f "$config" ]]; then
     ' "$config")
 fi
 
+#
+# GPUs, found by their device nodes.
+#
+# NVIDIA goes through the nvidia container toolkit, which injects the driver's
+# libraries as well as the devices; docker's own error names it when it is
+# missing. AMD needs only the nodes, since ROCm userspace ships with whatever
+# uses it, but the container runs as this uid rather than root, so it also
+# needs the groups that own them - by number, as the image has no 'render'
+# group and the GID differs between hosts. Root's group is never added.
+#
+gpu_args=()
+rocm_args=()
+
+if [[ -n "$gpu" ]]; then
+    [[ -e /dev/nvidiactl ]] && gpu_args+=(--gpus all)
+
+    if [[ -e /dev/kfd ]]; then
+        rocm_args+=(--device /dev/kfd --device /dev/dri)
+        for gid in $(stat -c %g /dev/kfd /dev/dri/* 2>/dev/null | sort -u); do
+            [[ "$gid" == 0 ]] || rocm_args+=(--group-add "$gid")
+        done
+        gpu_args+=("${rocm_args[@]}")
+    fi
+
+    [[ ${#gpu_args[@]} -gt 0 ]] ||
+        die "--gpu: no NVIDIA (/dev/nvidiactl) or AMD (/dev/kfd) GPU found"
+fi
+
 container_name="dev-agent-${agent}-$$"
 
 # What the EXIT trap removes, set as each comes into existence: the sidecar
@@ -752,7 +792,14 @@ if [[ -n "$dind" ]]; then
         # mounted there yet, which would hide a project mirrored under /tmp.
         --tmpfs /tmp
         --mount "$workspace_mount"
+
+        # AMD devices, so 'docker run --device /dev/kfd --device /dev/dri'
+        # works inside. NVIDIA would need the toolkit in the sidecar's image.
+        "${rocm_args[@]}"
     )
+
+    [[ -n "$gpu" && -e /dev/nvidiactl ]] &&
+        echo "dev-agent: --gpu under --dind: NVIDIA GPUs reach the agent, not containers it starts" >&2
 
     # sysbox runs a docker daemon without --privileged, and without a way out
     # of it. Plain runc needs --privileged, and a privileged container can
@@ -816,6 +863,7 @@ fi
 
 docker_args+=("${proxy_args[@]}")
 docker_args+=("${extra_mounts[@]}")
+docker_args+=("${gpu_args[@]}")
 docker_args+=("$IMAGE" "$agent" "$@")
 
 # Not exec'd: the EXIT trap that removes the sidecar and network has to outlive
