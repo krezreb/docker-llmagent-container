@@ -746,6 +746,8 @@ switched off its own sandbox with one HTTP call.
 | `PUT` | `/api/rulesets/<name>` | `{"enabled": true \| false}`. |
 | `DELETE` | `/api/rulesets/<name>/rules?index=` | Remove one rule by its position in the file. The other rules and the file's comments are left as they were; the comments written under the deleted rule go with it. Not undoable, so the UI asks first. |
 | `GET` | `/api/pending` | Currently held asks, each with its key, method, URL, category, clients and waiter count. |
+| `GET` | `/api/useragent` | The User-Agent override, `{"mode", "agents", "sticky"}`, plus `presets`: desktop and mobile browser strings to pick from. Operator only. |
+| `PUT` | `/api/useragent` | `{"mode": "passthrough" \| "single" \| "random", "agents": ["..."], "sticky": true}`. `passthrough` leaves the header alone; `single` sends the first of `agents` on every request; `random` picks one per request, or with `sticky` once per remote host and then always that one, until the next PUT or restart. Applied to intercepted requests only — a `tunnel` rule never shows the proxy a header. Kept in `/state/useragent.json`. |
 | `POST` | `/api/pending/<key>` | `{"decision":"allow" \| "deny", "save_to":"<ruleset>", "scope":"host" \| "host+path", "enable":true}`. `<key>` is the ask key of section 8.3, so one call resolves every request waiting on it. `enable` switches the disabled allow rule the entry reports in `disabled_allow` (and its ruleset, if that is what is off) back on instead of saving a second rule for the same host. |
 
 ### 11.2 The read-only subset
@@ -886,6 +888,9 @@ Vue 3, one page, three panes.
   — it is the one part of the UI someone is actually waiting on.
 - **Rulesets and mode.** The mode as four radio options, each ruleset as a toggle
   with its description and rule count, expandable to show the rules.
+- **User agent.** The override of `PUT /api/useragent`: a mode picker, the
+  per-host checkbox for `random`, a preset picker that appends to a one-per-line
+  list, and a save button. Nothing applies until save.
 
 The header carries the mode pills, the live indicator, and **Shutdown** and
 **Restart** (section 11.4). Shutdown confirms first, saying that every agent

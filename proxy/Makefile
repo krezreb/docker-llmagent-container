@@ -27,6 +27,7 @@ test: build
 	docker run --rm --entrypoint python3 $(IMAGE) /app/test_policy.py
 	docker run --rm --entrypoint python3 $(IMAGE) /app/test_log.py
 	docker run --rm --entrypoint python3 $(IMAGE) /app/test_events.py
+	docker run --rm --entrypoint python3 $(IMAGE) /app/test_useragent.py
 
 # Leaves /state alone: it holds the CA and the rulesets, and regenerating the
 # CA means re-trusting it everywhere.

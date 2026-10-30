@@ -530,6 +530,30 @@
         <span class="deny" v-if="error">{{ error }}</span>
       </div>
     </section>
+
+    <!-- What the agents are presented as upstream. Nothing applies until save,
+         so a half-typed list never goes out. Tunnelled hosts are not touched:
+         the proxy never sees their headers. -->
+    <section>
+      <h2>User agent</h2>
+      <div class="row" style="margin-bottom:.5rem">
+        <select v-model="ua.mode">
+          <option value="passthrough">passthrough — leave the agent's own</option>
+          <option value="single">single — always the first line</option>
+          <option value="random">random — one of the lines per request</option>
+        </select>
+        <label v-if="ua.mode === 'random'" title="Pick once per remote host, then keep sending that host the same one">
+          <input type="checkbox" v-model="ua.sticky"> same one per host</label>
+        <select v-if="ua.mode !== 'passthrough'" @change="addPreset">
+          <option value="">add a preset…</option>
+          <option v-for="p in uaPresets" :key="p.label" :value="p.ua">{{ p.label }}</option>
+        </select>
+        <button class="primary" @click="saveUa">save</button>
+        <span class="deny" v-if="uaError">{{ uaError }}</span>
+      </div>
+      <textarea v-if="ua.mode !== 'passthrough'" v-model="uaText" class="mono" rows="5"
+                style="width:100%" placeholder="one user agent per line"></textarea>
+    </section>
   </main>
 </div>
 
@@ -600,6 +624,7 @@ const app = Vue.createApp({
     mode: '', rulesets: [], pending: [], log: [], total: 0, open: null, connected: false,
     agents: [],
     capture: false,
+    ua: {mode: 'passthrough', agents: [], sticky: false}, uaText: '', uaPresets: [], uaError: '',
     fetchedAt: Date.now(), now: Date.now(), newRuleset: '', error: '',
     paint: null,
     // The rule being dragged, and the row it is over just now.
@@ -681,7 +706,8 @@ const app = Vue.createApp({
 
   async mounted() {
     await Promise.all([this.loadPolicy(), this.loadLog(), this.loadPending(),
-                       api('/api/capture').then(c => { this.capture = c.capture; })]);
+                       api('/api/capture').then(c => { this.capture = c.capture; }),
+                       api('/api/useragent').then(u => { this.uaPresets = u.presets; this.setUa(u); })]);
     this.stream();
     // A drag ends wherever the button comes up, which is often outside the row
     // it started in and sometimes outside the table.
@@ -806,6 +832,7 @@ const app = Vue.createApp({
       events.addEventListener('state', e => {
         const state = JSON.parse(e.data);
         if ('capture' in state) this.capture = state.capture;
+        else if ('useragent' in state) this.setUa(state.useragent);
         else this.loadPolicy();
       });
       events.addEventListener('agents', e => { this.agents = JSON.parse(e.data); });
@@ -845,6 +872,22 @@ const app = Vue.createApp({
     },
     async setCapture(event) {
       this.capture = (await put('/api/capture', {capture: event.target.checked})).capture;
+    },
+
+    setUa(u) {
+      this.ua = {mode: u.mode, agents: u.agents, sticky: u.sticky};
+      this.uaText = u.agents.join('\n');
+    },
+    addPreset(event) {
+      if (!event.target.value) return;
+      this.uaText = (this.uaText.trim() ? this.uaText.trim() + '\n' : '') + event.target.value;
+      event.target.value = '';
+    },
+    async saveUa() {
+      this.uaError = '';
+      try {
+        this.setUa(await put('/api/useragent', {...this.ua, agents: this.uaText.split('\n')}));
+      } catch (e) { this.uaError = e.message; }
     },
 
     // A rule label is `<file>:<note>` when a ruleset decided the request, and

@@ -294,6 +294,24 @@ class Capture(Base):
         self.write({"capture": self.ctx.capture})
 
 
+class UserAgent(Base):
+    """The User-Agent override. Operator only to change; what the agents
+    present themselves as is the operator's call."""
+
+    def get(self):
+        from useragent import PRESETS
+
+        self.write({**self.ctx.useragent.as_json(), "presets": PRESETS})
+
+    def put(self):
+        try:
+            self.ctx.useragent.set(self.body())
+        except ValueError as exc:
+            raise tornado.web.HTTPError(400, reason=str(exc))
+        self.ctx.log.event("state", {"useragent": self.ctx.useragent.as_json()})
+        self.write(self.ctx.useragent.as_json())
+
+
 class Pending(Base):
     def get(self):
         self.write({"pending": self.ctx.policy.pending.as_json()})
@@ -447,6 +465,8 @@ class Index(tornado.web.RequestHandler):
             "  GET  /api/pending       POST /api/pending/<key> {\"decision\": \"allow\"}\n"
             "  GET  /api/log           DELETE /api/log?seconds=3600\n"
             "  GET  /api/capture       PUT {\"capture\": true}\n"
+            "  GET  /api/useragent     PUT {\"mode\": \"random\", \"agents\": [\"...\"],\n"
+            "                               \"sticky\": true}\n"
             "  POST /api/heartbeat     (from an agent container, every 60s)\n"
             "  GET  /api/events (SSE)\n"
             "  POST /api/shutdown      POST /api/restart\n"
@@ -464,6 +484,7 @@ def serve(ctx) -> None:
             (r"/api/rulesets/([^/]+)", Rulesets, args),
             (r"/api/rulesets/([^/]+)/rules", Rules, args),
             (r"/api/capture", Capture, args),
+            (r"/api/useragent", UserAgent, args),
             (r"/api/pending", Pending, args),
             (r"/api/pending/([^/]+)", Pending, args),
             (r"/api/heartbeat", Heartbeat, args),

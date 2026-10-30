@@ -16,6 +16,7 @@ import uuid
 
 import api
 import policy as policy_mod
+import useragent
 from log import Log, now, warn
 
 STATE = os.environ.get("DEV_AGENT_PROXY_STATE", "/state")
@@ -104,6 +105,7 @@ class Ctx:
         # Whether request bodies go into the record. Off on every start: a
         # body can carry credentials, and it lands in log.jsonl.
         self.capture = False
+        self.useragent = useragent.UserAgent(STATE)
 
 
 class EgressProxy:
@@ -229,6 +231,8 @@ class EgressProxy:
         if action == "deny":
             self.deny(flow, host, rule, cat=cat, held_ms=held_ms,
                       client=flow.metadata["client"], rec_id=flow.metadata["id"])
+        elif ua := self.ctx.useragent.pick(host):
+            flow.request.headers["User-Agent"] = ua
 
     # -- records ---------------------------------------------------------
 
