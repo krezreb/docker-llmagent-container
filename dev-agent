@@ -25,9 +25,28 @@ config_value() {
     ' "$config"
 }
 
+# Prints the items of a top-level 'key:' list of the config file, one per line.
+config_list() {
+    awk -v key="$1" '
+        index($0, key ":") == 1      { in_list = 1; next }
+        in_list && /^[^[:space:]]/  { in_list = 0 }
+        in_list && /^[[:space:]]*-[[:space:]]/ {
+            sub(/^[[:space:]]*-[[:space:]]*/, "")
+            sub(/[[:space:]]+#.*$/, "")
+            sub(/[[:space:]]+$/, "")
+            gsub(/^["\047]|["\047]$/, "")
+            if ($0 != "") print
+        }
+    ' "$config"
+}
+
+# A host script whose KEY=VALUE output is added to the container's environment.
+env_script=""
+
 if [[ -f "$config" ]]; then
     default_image=$(config_value default_image)
     default_flags=$(config_value default_flags)
+    env_script=$(config_value env_script)
 fi
 
 if [[ -n "$default_image" && "$default_image" != *[:/]* ]]; then
@@ -608,16 +627,73 @@ if [[ -f "$config" ]]; then
             ro)   extra_mounts+=(--mount "type=bind,src=${src},dst=${dst},readonly") ;;
             *)    die "$config: unknown mount option '$opt' in: $entry" ;;
         esac
-    done < <(awk '
-        /^mounts:/                  { in_mounts = 1; next }
-        in_mounts && /^[^[:space:]]/ { in_mounts = 0 }
-        in_mounts && /^[[:space:]]*-[[:space:]]/ {
-            sub(/^[[:space:]]*-[[:space:]]*/, "")
-            sub(/[[:space:]]+#.*$/, "")
-            gsub(/^["'"'"']|["'"'"']$/, "")
-            if ($0 != "") print
-        }
-    ' "$config")
+    done < <(config_list mounts)
+fi
+
+#
+# Environment for the container, never put on docker's command line: each
+# variable is passed as a bare '--env NAME', so docker takes the value from
+# this process and it does not show up in ps.
+#
+#   env:            names passed through from the calling shell, when set
+#     - GH_TOKEN
+#   env_script: ~/.config/dev-agent/env.sh
+#                   run here before every launch; prints KEY=VALUE lines
+#
+# The wrapper's own variables cannot be overridden, rather than leaving the
+# winner to docker's ordering of repeated --env flags.
+#
+env_args=()
+
+env_reserved() {
+    case "$1" in
+        HOME|TERM|DOCKER_HOST|DEV_AGENT_*|[Hh][Tt][Tt][Pp]_[Pp][Rr][Oo][Xx][Yy]|[Hh][Tt][Tt][Pp][Ss]_[Pp][Rr][Oo][Xx][Yy]|[Nn][Oo]_[Pp][Rr][Oo][Xx][Yy]|SSL_CERT_FILE|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|GIT_SSL_CAINFO|CARGO_HTTP_CAINFO|PIP_CERT|NODE_EXTRA_CA_CERTS|NODE_OPTIONS)
+            return 0 ;;
+    esac
+    return 1
+}
+
+env_name() {
+    [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] ||
+        die "$2: not a valid variable name: $1"
+    ! env_reserved "$1" ||
+        die "$2: $1 is set by dev-agent itself and cannot be passed in"
+    env_args+=(--env "$1")
+}
+
+# A name with '*' in it, such as AWS_*, passes every variable of this shell
+# that matches it, except the reserved ones, which a pattern skips quietly.
+if [[ -f "$config" ]]; then
+    while IFS= read -r name; do
+        if [[ "$name" == *\** ]]; then
+            [[ "$name" =~ ^[A-Za-z0-9_*]+$ ]] ||
+                die "$config: not a valid variable pattern: $name"
+            for var in $(compgen -e); do
+                # shellcheck disable=SC2053
+                if [[ "$var" == $name ]] && ! env_reserved "$var"; then
+                    env_args+=(--env "$var")
+                fi
+            done
+        else
+            env_name "$name" "$config"
+        fi
+    done < <(config_list env)
+fi
+
+if [[ -n "$env_script" ]]; then
+    env_script="${env_script/#\~/$HOME}"
+    [[ -x "$env_script" ]] || die "env_script is not an executable file: $env_script"
+
+    env_out=$(DEV_AGENT_PROJECT="$project" DEV_AGENT_COMMAND="$agent" "$env_script") ||
+        die "env_script failed: $env_script"
+
+    # ponytail: one KEY=VALUE per line, so no multi-line values; mount a file for those.
+    while IFS= read -r line; do
+        [[ -z "${line//[[:space:]]/}" || "$line" == \#* ]] && continue
+        [[ "$line" == *=* ]] || die "$env_script: expected KEY=VALUE, got: ${line%%[[:space:]]*}..."
+        env_name "${line%%=*}" "$env_script"
+        export "${line%%=*}=${line#*=}"
+    done <<<"$env_out"
 fi
 
 #
@@ -864,6 +940,7 @@ fi
 docker_args+=("${proxy_args[@]}")
 docker_args+=("${extra_mounts[@]}")
 docker_args+=("${gpu_args[@]}")
+docker_args+=("${env_args[@]}")
 docker_args+=("$IMAGE" "$agent" "$@")
 
 # Not exec'd: the EXIT trap that removes the sidecar and network has to outlive

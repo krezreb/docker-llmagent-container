@@ -550,6 +550,52 @@ is ignored, so only the `mounts:` list matters.
 Mounting credentials such as `~/.ssh` gives the agent the ability to use them.
 Mount read-only, and only what the work actually needs.
 
+The container's environment holds only what `dev-agent` sets. To add host
+variables, name them in an `env:` list, which passes each one through from the
+shell you run `dev-agent` from, when it is set there:
+
+```yaml
+env:
+  - GH_TOKEN
+  - AWS_*        # every AWS_ variable set in the shell
+```
+
+A `*` matches any run of characters. Patterns skip the variables `dev-agent`
+sets itself rather than failing on them.
+
+```sh
+export GH_TOKEN="$(gh auth token)"
+dev-agent claude .
+```
+
+To skip the `export`, point `env_script:` at a host script. It runs before
+every launch, and each `KEY=VALUE` line it prints is added to the container's
+environment; if it exits non-zero, the launch stops. It gets `DEV_AGENT_PROJECT` and
+`DEV_AGENT_COMMAND`, so it can pick credentials per project.
+[`env.sh.example`](env.sh.example) fetches a GitHub token and short-lived AWS
+credentials:
+
+```yaml
+env_script: ~/.config/dev-agent/env.sh
+```
+
+```sh
+#!/bin/sh
+set -e
+echo "GH_TOKEN=$(gh auth token)"
+aws configure export-credentials --format env-no-export
+```
+
+Values are passed as bare `--env NAME`, so they never show up on docker's
+command line. Values must fit on one line; mount a file for anything longer.
+Variables `dev-agent` sets itself (`HOME`, the proxy and CA variables,
+`DEV_AGENT_*`) cannot be overridden.
+
+Like mounted credentials, any variable you pass is readable by the agent, and
+the agent can send it anywhere it can reach. Prefer narrow, short-lived
+credentials, such as a fine-grained GitHub token or STS session credentials,
+and use `--proxy` to limit where they can go.
+
 Environment variables:
 
 | Variable | Default | Purpose |

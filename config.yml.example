@@ -19,3 +19,17 @@ mounts:
   # - ~/.tmux.conf:/home/agent/.tmux.conf:ro
   # same for vim conf
   # - ~/.vimrc:/home/agent/.vimrc:ro
+
+# Host environment variables to pass into the container by name, when set in
+# the shell that runs dev-agent. A '*' matches any characters, so AWS_*
+# passes every AWS_ variable. Anything passed is readable by the agent.
+env:
+  # - GH_TOKEN
+  # - AWS_*
+  # - AWS_PROFILE
+
+# A host script run before every launch. Each KEY=VALUE line it prints is added
+# to the container's environment; a non-zero exit stops the launch. It is run
+# with DEV_AGENT_PROJECT and DEV_AGENT_COMMAND set, for per-project choices.
+# See env.sh.example in the dev-agent repository.
+# env_script: ~/.config/dev-agent/env.sh
