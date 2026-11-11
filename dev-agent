@@ -43,10 +43,15 @@ config_list() {
 # A host script whose KEY=VALUE output is added to the container's environment.
 env_script=""
 
+# A docker network the proxy joins, so agents can reach services on it (MCP
+# servers) through the proxy without joining it themselves.
+proxy_network=""
+
 if [[ -f "$config" ]]; then
     default_image=$(config_value default_image)
     default_flags=$(config_value default_flags)
     env_script=$(config_value env_script)
+    proxy_network=$(config_value proxy_docker_network)
 fi
 
 if [[ -n "$default_image" && "$default_image" != *[:/]* ]]; then
@@ -490,6 +495,26 @@ if [[ -n "$proxy" ]]; then
     # --proxy that refuses to start.
     docker compose -p dev-agent -f "$proxy_compose" up -d ||
         die "could not start the proxy; refusing to run without it"
+
+    # Services on this network (MCP servers) are reached through the proxy,
+    # which resolves their names there; the agents never join it, so they stay
+    # isolated from one another and from the network's other members.
+    #
+    # It must be internal. One with a gateway could take the proxy's default
+    # route, and the subnet guard on 8099 trusts whatever network carries
+    # that (SPEC section 11.3): its members would get the admin API.
+    # Reconnected every run because a recreated proxy comes back without it.
+    if [[ -n "$proxy_network" ]]; then
+        internal=$(docker network inspect -f '{{.Internal}}' "$proxy_network" 2>/dev/null) ||
+            die "proxy_docker_network: no docker network named $proxy_network"
+        [[ "$internal" == true ]] ||
+            die "proxy_docker_network: $proxy_network must be created with internal: true"
+        if ! docker inspect -f '{{json .NetworkSettings.Networks}}' dev-agent-proxy |
+                grep -q "\"$proxy_network\""; then
+            docker network connect "$proxy_network" dev-agent-proxy ||
+                die "could not attach the proxy to $proxy_network"
+        fi
+    fi
 
     # First run only: the proxy generates the CA as it starts, which takes
     # about two seconds. Polled tenth of a second rather than by the second so

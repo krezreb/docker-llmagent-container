@@ -271,6 +271,12 @@ class EgressProxy:
             )
         )
 
+    def responseheaders(self, flow):
+        # Server-sent events (MCP over HTTP) never finish, so a buffered
+        # response would never reach the agent. bytes_down logs as 0 for these.
+        if flow.response.headers.get("content-type", "").startswith("text/event-stream"):
+            flow.response.stream = True
+
     def response(self, flow):
         if flow.metadata.get("logged") or flow.request.method == "CONNECT":
             return

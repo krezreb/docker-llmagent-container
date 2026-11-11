@@ -121,6 +121,12 @@ and the mounted certificate in separate directories for that reason.
 **Localhost within the container** is unaffected, and so is container-to-proxy
 traffic. An agent can still talk to itself.
 
+**Services on the shared service network** (section 5, `proxy_docker_network`) are
+reachable by every agent, through the proxy. A service there that has its own route
+to the internet, such as an MCP server on a second network, is a channel out that
+the proxy logs only as far as the request to that service: what the service then
+does with it is outside the proxy's view.
+
 ## 5. Architecture
 
 ```
@@ -174,6 +180,25 @@ of section 10.1 still answers `<container>.<network>` from the proxy's side; and
 subnet guard of section 11.3 derives the trusted subnet from the default route,
 which only `egress` carries, so an extra interface per session is untrusted by
 construction.
+
+**A shared service network, joined by the proxy and not by the agents.** Services
+the agents should reach — MCP servers, notably — live on one docker network named by
+`proxy_docker_network:` in `config.yml`. `dev-agent` attaches the proxy to it on every
+`--proxy` run (a recreated proxy comes back without it), and never the agent. An agent
+reaches `http://mcp-foo:8080` the way it reaches anything else: through
+`HTTP_PROXY`, with the proxy resolving the name on that network. So the agents stay
+isolated from one another and from the network's other members, the requests are
+logged and subject to policy like any other host, and `NO_PROXY` does not change.
+
+The network must already exist and be `internal: true`, and `dev-agent` refuses to
+start otherwise. One with a gateway could carry the proxy's default route, and the
+subnet guard of section 11.3 trusts whichever network does: every service on it would
+get the full API on `8099`. A service that needs the internet joins a second network
+of its own. Only HTTP reaches these services, since the proxy is the only path.
+
+MCP over HTTP answers with server-sent events, a response that does not end. The
+proxy buffers response bodies by default, so the addon marks any
+`text/event-stream` response as streamed; its log record shows `bytes_down` as 0.
 
 ### 5.1 proxy/compose.yml
 

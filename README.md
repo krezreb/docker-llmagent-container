@@ -596,6 +596,27 @@ the agent can send it anywhere it can reach. Prefer narrow, short-lived
 credentials, such as a fine-grained GitHub token or STS session credentials,
 and use `--proxy` to limit where they can go.
 
+Under `--proxy`, agents can reach other containers, such as MCP servers, on a
+docker network that the proxy joins and the agents do not. Name it in
+`config.yml`:
+
+```yaml
+proxy_docker_network: mcp
+```
+
+```sh
+docker network create --internal mcp
+docker run -d --network mcp --name mcp-foo some/mcp-server
+```
+
+The agent then reaches `http://mcp-foo:8080` by name, through the proxy, so
+the requests are logged and need an allow rule like any other host. Agents
+still cannot reach each other. The network must be created with `--internal`,
+or `dev-agent` refuses to start; a service that needs the internet joins a
+second network of its own, and can then carry whatever the agent sends it
+out. Only HTTP works, since the proxy is the only path; streamed (SSE)
+responses are passed through as they arrive.
+
 Environment variables:
 
 | Variable | Default | Purpose |
