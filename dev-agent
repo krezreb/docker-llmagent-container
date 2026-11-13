@@ -99,6 +99,10 @@ Options:
                 AMD devices are passed to the sidecar too, for nested
                 'docker run --device'.
     --no-gpu    Undo --gpu, such as one from 'default_flags:'.
+    --outbox    Mount ~/.local/dev-agent-outbox/<container> at /outbox,
+                writable even under --ro, for getting files out of the
+                agent.
+    --no-outbox Undo --outbox, such as one from 'default_flags:'.
     --image NAME
                 Run this image instead of $DEV_AGENT_IMAGE, 'default_image:'
                 in config.yml, or dev-agent:ubuntu26. A bare variant name
@@ -126,6 +130,7 @@ Examples:
     dev-agent --proxy claude ~/src/foo
     dev-agent --dind claude ~/src/foo
     dev-agent --gpu claude ~/src/foo
+    dev-agent --outbox --ro claude ~/src/foo
     dev-agent --image full claude ~/src/foo
     dev-agent --kill-all
 EOF
@@ -160,6 +165,10 @@ dind=""
 # The host's GPUs, NVIDIA or AMD, whichever are found. Off by default: the
 # device nodes are a kernel attack surface the agent otherwise never touches.
 gpu=""
+
+# A per-container directory on the host, writable from inside, for files the
+# agent should hand back. Off by default: most runs never need one.
+outbox=""
 
 # The project is mirrored at its host path unless that is turned off, either
 # for one run with --workspace or for good with DEV_AGENT_MIRROR=0.
@@ -238,6 +247,8 @@ take_flags() {
             --no-dind)   dind="" ;;
             --gpu)       gpu=1 ;;
             --no-gpu)    gpu="" ;;
+            --outbox)    outbox=1 ;;
+            --no-outbox) outbox="" ;;
             --kill-all)  kill_all ;;
             --image)
                 image_flag "${2:-}"
@@ -964,6 +975,16 @@ fi
 
 docker_args+=("${proxy_args[@]}")
 docker_args+=("${extra_mounts[@]}")
+
+# Its own directory per container, never one shared with anything on the host
+# or with other agents: the agent runs as your uid, and a symlink it plants in
+# a directory the host later writes to would redirect that write anywhere.
+if [[ -n "$outbox" ]]; then
+    outbox_dir="$HOME/.local/dev-agent-outbox/${container_name}"
+    mkdir -p "$outbox_dir" || die "could not create $outbox_dir"
+    printf 'dev-agent: outbox at %s\n' "$outbox_dir" >&2
+    docker_args+=(--mount "type=bind,src=${outbox_dir},dst=/outbox")
+fi
 docker_args+=("${gpu_args[@]}")
 docker_args+=("${env_args[@]}")
 docker_args+=("$IMAGE" "$agent" "$@")

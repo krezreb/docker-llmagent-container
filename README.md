@@ -150,7 +150,7 @@ leaves docker's cache in charge and lets an offline build go through.
 ## Usage
 
 ```
-dev-agent [--ro] [--workspace] [--host-network] [--proxy] [--dind] [--gpu] [codex|claude|bash|tmux] [directory] [agent arguments...]
+dev-agent [--ro] [--workspace] [--host-network] [--proxy] [--dind] [--gpu] [--outbox] [codex|claude|bash|tmux] [directory] [agent arguments...]
 ```
 
 `bash` drops you into a shell in the same sandbox, which is useful for
@@ -350,6 +350,21 @@ The CUDA or ROCm userspace is not in the images; PyTorch wheels and the like
 bring their own. Under `--dind`, AMD devices are also passed to the sidecar, so
 `docker run --device /dev/kfd --device /dev/dri ...` works inside; NVIDIA GPUs
 reach the agent but not the containers it starts.
+
+## Getting files out (`--outbox`)
+
+```sh
+dev-agent --outbox --ro claude ~/src/foo
+```
+
+`--outbox` creates `~/.local/dev-agent-outbox/<container>` on the host and
+mounts it at `/outbox`, writable even under `--ro`. The path is printed on stderr at
+start. Each container gets its own directory, and it stays after the agent
+exits; clean it up yourself.
+
+Do not share a host directory that host tools write into, such as
+`/tmp/claude-<uid>`, instead. The agent runs as your uid, so a symlink it plants
+there redirects the host's next write to any file you own.
 
 ## Git worktrees
 
