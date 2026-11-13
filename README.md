@@ -632,6 +632,27 @@ second network of its own, and can then carry whatever the agent sends it
 out. Only HTTP works, since the proxy is the only path; streamed (SSE)
 responses are passed through as they arrive.
 
+SSH works under `--proxy` too, for hosts you open explicitly. The image routes
+`ssh` (and so `git` over SSH) through the proxy as a CONNECT tunnel, and the
+proxy lets a raw TCP stream through only when a `tunnel` rule names its host and
+port. Every attempt is logged, allowed or not:
+
+```yaml
+rules:
+  - {match: "github.com:22", action: tunnel, note: git over ssh}
+```
+
+An `allow` rule never opens raw TCP; it is for HTTP. A `tunnel` rule on the
+bare host (`github.com`) would open every port, and would also stop the proxy
+inspecting HTTPS to it, so name the port.
+
+The container's own resolver answers only container names under `--proxy`, so
+`dig example.com` finds nothing. The proxy answers DNS itself:
+`dig @dev-agent-proxy example.com`. Every query is logged, `deny` rules apply
+to names, and names that resolve to private addresses are refused. Note that
+this gives an agent a way to send data out in the names it looks up; the log
+shows them, and `lockdown` stops them.
+
 Environment variables:
 
 | Variable | Default | Purpose |

@@ -11,7 +11,7 @@ RUN apt-get update \
         git \
         jq \
         less \
-        openssh-client \
+        openssh-client netcat-openbsd \
         python3 \
         python3-pip \
         python3-venv \
@@ -33,6 +33,15 @@ ADD --chmod=644 https://raw.githubusercontent.com/cmatsuoka/figlet-fonts/0ab03ce
 # older git still reads and writes such a worktree, but reports it as prunable,
 # and `git gc` then drops its registration.
 RUN git config --system worktree.useRelativePaths true
+
+# Under --proxy the network has no route out, so ssh (and git over ssh) goes
+# through the proxy as a CONNECT tunnel. The proxy lets it through only to a
+# host:port a 'tunnel' rule names. Without --proxy, HTTPS_PROXY is unset and
+# ssh connects directly as usual.
+RUN cat > /etc/ssh/ssh_config.d/dev-agent-proxy.conf <<'EOF'
+Match exec "test -n \"$HTTPS_PROXY\""
+    ProxyCommand nc -X connect -x dev-agent-proxy:3128 %h %p
+EOF
 
 # Node.js from NodeSource; Ubuntu 26.04 ships Node 22 with npm 9.
 ARG NODE_MAJOR=24

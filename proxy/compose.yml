@@ -14,6 +14,10 @@ services:
     user: "${DEV_AGENT_UID:-1000}:${DEV_AGENT_GID:-1000}"
     environment:
       HOME: /tmp
+    # DNS on 53 (SPEC section 4) without root: the sysctl is per network
+    # namespace, so it lowers the bar for this container alone.
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
     ports:
       - "127.0.0.1:8099:8099"
     volumes:

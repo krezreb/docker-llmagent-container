@@ -8,6 +8,7 @@ per request is unusable the first time an `npm install` hits it.
 """
 
 import asyncio
+import ipaddress
 import os
 import sys
 import tempfile
@@ -722,6 +723,50 @@ rules:
     assert (action, label) == ("deny", "r.yml:saved from the UI")
     assert (rule.match, rule.path) == ("api.github.com", None)
     assert p.decide_rule("nothing.example.com", "/")[2] is None
+
+
+def test_raw_tcp_needs_a_tunnel_rule():
+    rules = {"r.yml": """
+rules:
+  - {match: "github.com:22", action: tunnel, note: ssh}
+  - {match: gitlab.com, action: tunnel, note: every port}
+  - {match: "*.github.com", action: allow}
+  - {match: bad.github.com, action: deny}
+  - {match: "gitlab.com:2222", action: deny}
+"""}
+    p = Policy(state(rules))
+    assert p.decide_tcp("github.com", 22)[:2] == ("tunnel", "r.yml:ssh")
+    assert p.decide_tcp("github.com", 2222)[0] == "deny"
+    # A host:port rule leaves HTTPS to the host alone: still held, still inspected.
+    assert p.decide_rule("github.com", None)[0] == "pending"
+    assert p.decide_tcp("gitlab.com", 22)[:2] == ("tunnel", "r.yml:every port")
+    assert p.decide_tcp("gitlab.com", 2222)[0] == "deny"
+    # An allow rule is for HTTP; it does not open raw TCP to the host.
+    assert p.decide_tcp("api.github.com", 22)[:2] == ("deny", "tcp:no tunnel rule")
+    assert p.decide_tcp("bad.github.com", 22)[0] == "deny"
+    # Nothing matching is denied outright, never held.
+    assert p.decide_tcp("example.com", 22)[:2] == ("deny", "tcp:no tunnel rule")
+    assert Policy(state(rules, mode="log-only")).decide_tcp("example.com", 22)[0] == "tunnel"
+    assert Policy(state(rules, mode="lockdown")).decide_tcp("github.com", 22)[0] == "deny"
+
+
+def test_dns_answers_unless_denied_and_never_names_private_addresses():
+    rules = {"r.yml": """
+rules:
+  - {match: "*.evil.example", action: deny, note: nope}
+  - {match: github.com, action: allow, note: gh}
+"""}
+    p = Policy(state(rules))
+    assert p.decide_dns("x.evil.example.")[:2] == ("deny", "r.yml:nope")
+    assert p.decide_dns("github.com.")[:2] == ("allow", "r.yml:gh")
+    # Unknown names are answered, not held: looking them up is the point.
+    assert p.decide_dns("example.com")[:2] == ("allow", "dns:answered by default")
+    assert p.decide_dns("8.8.8.8.in-addr.arpa")[0] == "allow"
+    assert p.decide_dns("2.0.17.172.in-addr.arpa.")[:2] == ("deny", "dns:private address")
+    assert p.decide_dns("17.172.in-addr.arpa")[0] == "deny"  # a zone, not an address
+    v6 = ipaddress.ip_address("2001:4860:4860::8888").reverse_pointer
+    assert p.decide_dns(v6)[0] == "allow"  # 2001:4860:4860::8888
+    assert Policy(state(rules, mode="lockdown")).decide_dns("github.com")[0] == "deny"
 
 
 if __name__ == "__main__":

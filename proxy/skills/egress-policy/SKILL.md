@@ -25,8 +25,18 @@ is not allowed, say which host and why, and ask them to allow it — that is the
 correct next step, not a workaround. The UI lists this container as
 `$DEV_AGENT_NAME`; give that name too, so they approve the right request.
 
-Anything that is not HTTP or HTTPS has no route out at all, including `git`
-over SSH. Use an HTTPS remote.
+`ssh`, and `git` over SSH, go through the proxy as a tunnel, and only to a
+`host:port` the human has opened with a `tunnel` rule (`github.com:22`, say).
+A refused one shows up as the connection closing straight away, with no
+message: check the policy, then ask for the rule or use an HTTPS remote. Any
+other non-HTTP protocol has no route out unless its client can use an HTTP
+CONNECT proxy.
+
+Plain `dig example.com` finds nothing here: the container's resolver knows
+only container names. Ask the proxy instead, `dig @dev-agent-proxy example.com`
+(any record type, `-x` for public addresses). Programs resolve names through
+the proxy on their own when they use `HTTPS_PROXY`; this is for looking
+things up.
 
 ## Headless browsers
 

@@ -14,6 +14,8 @@ import socket
 import time
 import uuid
 
+from mitmproxy import dns
+
 import api
 import policy as policy_mod
 from log import Log, now, warn
@@ -177,6 +179,73 @@ class EgressProxy:
             # so bytes and duration stay 0 — counting them means tracking the
             # raw connection to its close. Add that if the byte counts on
             # tunnelled hosts ever need to be real.
+        )
+
+    def tcp_start(self, flow):
+        """Raw TCP through CONNECT: ssh, or anything mitmproxy's rawtcp
+        fallback takes for not-HTTP. Neither request() nor tls_clienthello()
+        ever sees it, so without this every such stream went out unchecked
+        and unlogged. Host and port come from the CONNECT line."""
+        host, port = flow.server_conn.address
+        action, rule, hit = self.policy.decide_tcp(host, port)
+        if action != "tunnel":
+            # Not flow.kill(): TCPLayer ignores it and relays anyway. An error
+            # on the server connection is what open_connection refuses on, and
+            # under connection_strategy=lazy nothing has been dialled yet.
+            flow.server_conn.error = "denied by dev-agent proxy policy"
+        self.log.record(
+            self.record(
+                client=self._client(flow.client_conn), scheme="tcp",
+                host=host, port=port, decision=action, rule=rule,
+                **_rule_fields(hit),
+            )
+        )
+
+    def tcp_message(self, flow):
+        # The flow keeps every chunk it relays, for the life of the
+        # connection; an scp of a large file would sit in memory whole.
+        flow.messages.clear()
+
+    # -- DNS — the dns@53 listener, for dig and friends ------------------
+    # Runs before mitmproxy's own DnsResolver (scripts load ahead of it), so
+    # a denied name is answered here and never sent upstream.
+
+    def dns_request(self, flow):
+        q = flow.request.question
+        if q is None:
+            return
+        action, rule, hit = self.policy.decide_dns(q.name)
+        flow.metadata.update(decision=action, rule=rule, **_rule_fields(hit))
+        if action == "deny":
+            flow.response = flow.request.fail(dns.response_codes.REFUSED)
+
+    def dns_response(self, flow):
+        q = flow.request.question
+        if q is None:
+            return
+        # The proxy resolves through docker, which answers agent container
+        # names (and their aliases with the network appended) with private
+        # addresses. No agent can reach those anyway, so none are handed out.
+        if flow.metadata.get("decision") == "allow" and any(
+            r.type in (dns.types.A, dns.types.AAAA)
+            and not (r.ipv4_address if r.type == dns.types.A else r.ipv6_address).is_global
+            for r in flow.response.answers
+        ):
+            flow.metadata.update(decision="deny", rule="dns:private address",
+                                 rule_match=None, rule_path=None)
+            flow.response = flow.request.fail(dns.response_codes.REFUSED)
+        self.log.record(
+            self.record(
+                client=self._client(flow.client_conn),
+                method=dns.types.to_str(q.type), scheme="dns",
+                host=q.name.rstrip("."), port=53,
+                status=dns.response_codes.http_equiv_status_code(
+                    flow.response.response_code),
+                decision=flow.metadata.get("decision"),
+                rule=flow.metadata.get("rule"),
+                rule_match=flow.metadata.get("rule_match"),
+                rule_path=flow.metadata.get("rule_path"),
+            )
         )
 
     # Nothing is decided at CONNECT, deliberately. A 403 answered to a CONNECT

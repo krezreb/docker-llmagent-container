@@ -307,7 +307,7 @@
             <td class="mono dim">{{ new Date(rec.ts).toLocaleTimeString([], {hourCycle: 'h23'}) }}</td>
             <td class="mono">{{ rec.client }}</td>
             <td class="mono truncate">
-              {{ rec.method || 'CONNECT' }} {{ rec.host }}{{ rec.path || '' }}
+              {{ rec.method || 'CONNECT' }} {{ rec.host }}{{ rec.scheme === 'tcp' ? ':' + rec.port : '' }}{{ rec.path || '' }}
             </td>
             <td class="dim">{{ rec.cat }}</td>
             <td class="mono">{{ rec.status === null ? '—' : rec.status }}</td>

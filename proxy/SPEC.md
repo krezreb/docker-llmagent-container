@@ -99,10 +99,30 @@ to "measured absent on docker 29.8.0", and the upgrade path stands if it ever co
 back: give the agent container a stub resolver that knows only the proxy's name, or
 skip DNS entirely by passing the proxy's address as an IP.
 
-**Non-HTTP protocols.** Anything that is not HTTP or HTTPS has no path out: raw TCP,
-UDP, `git+ssh`, `ssh`, database connections to the internet. These fail rather than
-being filtered. This is a real behaviour change, not a detail: **`git push` over SSH
-stops working under `--proxy`.** Use an HTTPS remote, or run without `--proxy`.
+**The proxy's own DNS listener.** That leaves `dig` and `host` with nothing to ask,
+so the proxy also serves DNS on `53/udp` (mitmproxy's `dns` mode), and an agent asks
+it by name: `dig @dev-agent-proxy example.com`. The container's resolver is left
+alone, so a client that bypasses `HTTPS_PROXY` still fails at resolution as above.
+A query is answered unless a `deny` rule matches the name or the mode is `lockdown`;
+nothing is held, because a resolver gives up long before a human answers. Every query
+is logged with `scheme: "dns"` and the record type as `method`. The proxy resolves
+through docker, which knows every agent container by name, so an answer carrying a
+non-public address is refused, and so is a reverse lookup of one. This **reopens DNS
+as an exfiltration channel**, deliberately: a name an agent makes up reaches its
+authoritative server. It is a visible channel — every name is in the log — and a
+`deny` rule or `lockdown` closes it.
+
+**Non-HTTP protocols.** A client that speaks HTTP CONNECT can carry raw TCP through
+the proxy: mitmproxy's `rawtcp` fallback relays any stream after a CONNECT that does
+not look like HTTP, and detects `SSH` by name. That path once skipped the policy
+entirely — neither `request` nor `tls_clienthello` sees it — so it is now decided in
+`tcp_start`: a raw TCP stream goes through only on a `tunnel` rule matching
+`host:port` or the bare host, or under `default-allow`/`log-only`, and anything else
+is refused before the upstream is dialled, never held (8.2). Every attempt is
+logged with `scheme: "tcp"`. The agent image routes `ssh` through this with a
+`ProxyCommand` that applies when `HTTPS_PROXY` is set, so **`git push` over SSH works
+under `--proxy` once a rule such as `github.com:22` is tunnelled**. UDP, and TCP from
+clients that cannot speak CONNECT (most database drivers), still have no path out.
 
 **Certificate-pinned clients.** The proxy intercepts TLS with its own certificate
 authority. A client that pins a certificate will refuse the connection. The escape
@@ -536,7 +556,8 @@ A rule is `{ match, path?, action, note? }`:
 
 - `match` — the host. A glob (`*.example.com`), a CIDR (`10.0.0.0/8`, `fd00::/8`),
   or a regular expression when written as `/.../`. Matched case-insensitively against
-  the hostname only, never the port. A CIDR matches only a request made to a literal
+  the hostname only, never the port — except for a raw TCP stream, which is also
+  tried as `host:port`, so `github.com:22` opens ssh without the bare host. A CIDR matches only a request made to a literal
   IP address in that range; a name is never resolved to compare it.
 - `path` — optional glob against the request path, or several separated by spaces,
   the first that matches winning. Absent means any path. Under a

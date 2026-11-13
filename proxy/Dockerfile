@@ -21,11 +21,11 @@ ADD --chmod=644 --checksum=sha256:dae9c178e86e09240e58721cdb46a81ac96ae1dc6a870d
 
 COPY . /app
 
-# 3128 the proxy, 8099 the UI and full API, 8098 the read-only API agents use.
-# Only 3128 and 8098 are reachable from the agents network; 8099 is published
+# 3128 the proxy, 53/udp DNS for agents that ask it directly, 8099 the UI and full API, 8098 the read-only API agents use.
+# Only 3128, 53 and 8098 are reachable from the agents network; 8099 is published
 # to the host's loopback by compose.yml, and carries the subnet guard of
 # SPEC section 11.3 as well.
-EXPOSE 3128 8098 8099
+EXPOSE 3128 53/udp 8098 8099
 
 # confdir is mitmproxy's own, and holds the CA private key: it is why /state
 # has two directories and only agent-ca/ is ever mounted into a container.
@@ -35,7 +35,8 @@ EXPOSE 3128 8098 8099
 # would leak the fact of the attempt.
 ENTRYPOINT ["mitmdump"]
 CMD ["--listen-host", "0.0.0.0", \
-     "--listen-port", "3128", \
+     "--mode", "regular@3128", \
+     "--mode", "dns@53", \
      "--set", "confdir=/state/ca", \
      "--set", "connection_strategy=lazy", \
      "--quiet", \

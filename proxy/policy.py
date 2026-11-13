@@ -49,6 +49,22 @@ def match_host(pattern: str, host: str) -> bool:
     return fnmatch.fnmatchcase(host.lower(), pattern.lower())
 
 
+def reverse_ip(name: str):
+    """The address a full in-addr.arpa or ip6.arpa name stands for, or None."""
+    name = name.lower().rstrip(".")
+    try:
+        if name.endswith(".in-addr.arpa"):
+            parts = name.removesuffix(".in-addr.arpa").split(".")
+            return ipaddress.IPv4Address(".".join(reversed(parts))) if len(parts) == 4 else None
+        nibbles = name.removesuffix(".ip6.arpa").split(".")
+        if len(nibbles) != 32:
+            return None
+        h = "".join(reversed(nibbles))
+        return ipaddress.IPv6Address(":".join(h[i:i + 4] for i in range(0, 32, 4)))
+    except ValueError:
+        return None
+
+
 def match_path(pattern: str, path: str | None) -> bool:
     """Space-separated globs, first match wins — one rule, several paths."""
     # A rule carrying a path cannot match a request whose path is unknown —
@@ -488,6 +504,46 @@ class Policy:
             if match_host(pattern, host):
                 return cat
         return "unknown"
+
+    def decide_tcp(self, host: str, port: int) -> tuple[str, str, Rule | None]:
+        """decide_rule() for a raw TCP stream (ssh through CONNECT, say).
+
+        Only `tunnel` opens one, or a mode that allows everything: an `allow`
+        rule written for a host's HTTPS must not also open its port 22, and
+        there is no request a human could be shown and held on. Rules are
+        tried against `host:port` as well as `host`, so `github.com:22` opens
+        ssh alone, while a bare `github.com` tunnel would also stop HTTPS to
+        it being inspected. A deny on either form wins. SPEC 8.2.
+        """
+        decisions = [self.decide_rule(f"{host}:{port}", None),
+                     self.decide_rule(host, None)]
+        for wanted in ("deny", "tunnel"):
+            for action, label, rule in decisions:
+                if action == wanted:
+                    return action, label, rule
+        if self.mode in ("default-allow", "log-only"):
+            return "tunnel", f"mode:{self.mode}", None
+        return "deny", "tcp:no tunnel rule", None
+
+    def decide_dns(self, name: str) -> tuple[str, str, Rule | None]:
+        """A query to the proxy's DNS listener: allow unless something denies.
+
+        Nothing is held — a resolver gives up after a few seconds — and a name
+        nothing mentions is answered, since looking names up is the point.
+        Reverse lookups are answered only for public addresses: the proxy
+        resolves through docker, which would name every agent container.
+        """
+        name = name.rstrip(".")
+        if self.mode == "lockdown":
+            return "deny", "mode:lockdown", None
+        if name.lower().endswith((".in-addr.arpa", ".ip6.arpa")):
+            ip = reverse_ip(name)
+            if ip is None or not ip.is_global:
+                return "deny", "dns:private address", None
+        action, label, rule = self.decide_rule(name, None)
+        if action == "deny":
+            return action, label, rule
+        return "allow", label if rule else "dns:answered by default", rule
 
     def decide(self, host: str, path: str | None) -> tuple[str, str]:
         """(action, rule label). action is allow, deny, tunnel or pending."""
