@@ -652,6 +652,20 @@ if [[ -n "$proxy" ]]; then
 fi
 
 #
+# Your own claude skills, kept with your config rather than in this repo, so
+# they can describe this machine's setup. Copied into the shared HOME on every
+# launch, so an edit on the host is picked up by the next agent. egress-policy
+# is left to the proxy block above: it is only true when --proxy is on.
+#
+if [[ "$agent" == claude ]]; then
+    for dir in "$HOME/.config/dev-agent/skills"/*/; do
+        [[ -f "${dir}SKILL.md" && "$(basename "$dir")" != egress-policy ]] || continue
+        mkdir -p "$agent_home/.claude/skills"
+        cp -r "${dir%/}" "$agent_home/.claude/skills/"
+    done
+fi
+
+#
 # Optional extra mounts, from a config file of the form:
 #
 #   mounts:

@@ -653,6 +653,13 @@ to names, and names that resolve to private addresses are refused. Note that
 this gives an agent a way to send data out in the names it looks up; the log
 shows them, and `lockdown` stops them.
 
+Claude skills of your own go in `~/.config/dev-agent/skills/<name>/SKILL.md`.
+Each launch of `claude` copies every one into the agent's HOME, so they can
+describe this machine (its MCP services, accounts, config) without that ending
+up in a repository. Deleting one on the host does not remove the copy; delete
+it from `~/.local/share/dev-agent/home/.claude/skills` too. `egress-policy` is
+the exception: it is copied only under `--proxy`.
+
 Environment variables:
 
 | Variable | Default | Purpose |
