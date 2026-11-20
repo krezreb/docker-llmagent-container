@@ -482,6 +482,8 @@ write_marked_block() {
     mv "$tmp" "$file"
 }
 
+copied_skills=()
+
 if [[ -n "$proxy" ]]; then
     # The host network namespace has direct internet access by definition, so
     # the combination is a contradiction rather than a layering.
@@ -635,6 +637,7 @@ if [[ -n "$proxy" ]]; then
             claude)
                 mkdir -p "$agent_home/.claude/skills/egress-policy"
                 cp "$skill" "$agent_home/.claude/skills/egress-policy/SKILL.md"
+                copied_skills+=(egress-policy)
                 ;;
             codex)
                 write_marked_block "$agent_home/.codex/AGENTS.md" \
@@ -662,7 +665,18 @@ if [[ "$agent" == claude ]]; then
         [[ -f "${dir}SKILL.md" && "$(basename "$dir")" != egress-policy ]] || continue
         mkdir -p "$agent_home/.claude/skills"
         cp -r "${dir%/}" "$agent_home/.claude/skills/"
+        copied_skills+=("$(basename "$dir")")
     done
+
+    # Claude only invokes a skill when it judges the description relevant, so
+    # tell it in the agent's global CLAUDE.md to load these up front.
+    if (( ${#copied_skills[@]} )); then
+        write_marked_block "$agent_home/.claude/CLAUDE.md" \
+            '<!-- >>> dev-agent skills >>> -->' \
+            '<!-- <<< dev-agent skills <<< -->' \
+            <(printf 'At the start of every session, before anything else, invoke each of these skills with the Skill tool and follow them: %s.\n' \
+                "$(IFS=,; echo "${copied_skills[*]}" | sed 's/,/, /g')")
+    fi
 fi
 
 #

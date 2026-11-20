@@ -658,7 +658,9 @@ Each launch of `claude` copies every one into the agent's HOME, so they can
 describe this machine (its MCP services, accounts, config) without that ending
 up in a repository. Deleting one on the host does not remove the copy; delete
 it from `~/.local/share/dev-agent/home/.claude/skills` too. `egress-policy` is
-the exception: it is copied only under `--proxy`.
+the exception: it is copied only under `--proxy`. Every copied skill is also
+listed in a marked block in the agent's `~/.claude/CLAUDE.md`, telling claude to
+invoke it at the start of each session.
 
 Environment variables:
 
