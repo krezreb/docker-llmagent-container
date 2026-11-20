@@ -504,8 +504,21 @@ if [[ -n "$proxy" ]]; then
     # Idempotent and fast when the proxy is already up. Failure is fatal:
     # --proxy that silently degraded to unfiltered access would be worse than
     # --proxy that refuses to start.
-    docker compose -p dev-agent -f "$proxy_compose" up -d ||
-        die "could not start the proxy; refusing to run without it"
+    #
+    # A stopped proxy can still hold attachments to agent networks that no
+    # longer exist (runs killed hard, then 'docker network prune'), and docker
+    # refuses to start it. Recreate it then, and put it back on the agent
+    # networks that do still exist, for agents still running.
+    if ! docker compose -p dev-agent -f "$proxy_compose" up -d; then
+        echo "dev-agent: recreating the proxy" >&2
+        docker compose -p dev-agent -f "$proxy_compose" up -d --force-recreate ||
+            die "could not start the proxy; refusing to run without it"
+        docker network ls --format '{{.Name}}' --filter name=dev-agent- |
+            grep -- '-net$' |
+            while read -r net; do
+                docker network connect "$net" dev-agent-proxy >/dev/null 2>&1
+            done
+    fi
 
     # Services on this network (MCP servers) are reached through the proxy,
     # which resolves their names there; the agents never join it, so they stay
