@@ -332,7 +332,7 @@
               <div v-if="rec.host && !covered(rec)" class="row"
                    :class="{flash: flash === rec.id}" style="margin-bottom:.5rem">
                 <span class="dim">save as</span>
-                <button class="primary" @click="addRuleFromLog(rec, 'allow')">allow</button>
+                <button class="primary" @click="addRuleFromLog(rec, 'allow')">{{ rec.scheme === 'tcp' ? 'tunnel' : 'allow' }}</button>
                 <button class="danger" @click="addRuleFromLog(rec, 'deny')">deny</button>
                 <select v-model="logRule.scope">
                   <option value="host">host</option>
@@ -848,11 +848,11 @@ const app = Vue.createApp({
     },
 
     // A rule label is `<file>:<note>` when a ruleset decided the request, and
-    // `mode:`, `pending:` or `error:` when none did — the latter is the row
+    // `mode:`, `pending:`, `error:`, `tcp:` or `dns:` when none did — the latter is the row
     // worth turning into a rule after the fact: allowed once, or waved through
     // by log-only or default-allow.
     covered(record) {
-      return !!record.rule && !/^(mode|pending|error):/.test(record.rule);
+      return !!record.rule && !/^(mode|pending|error|tcp|dns):/.test(record.rule);
     },
     // The rule behind a covered record: `<file>:<note>` as policy.decide
     // writes it, with the ruleset's display name looked up from the policy.
@@ -927,7 +927,12 @@ const app = Vue.createApp({
         await api('/api/rulesets/' + this.logRule.saveTo + '/rules', {
           method: 'POST', headers: {'content-type': 'application/json'},
           body: JSON.stringify({rules: [
-            {match: record.host, action, path, note: 'saved from the log'},
+            // Raw TCP opens only on a tunnel rule, and one scoped to the port
+            // so the host's HTTPS stays inspected. SPEC 8.2.
+            record.scheme === 'tcp'
+              ? {match: record.host + ':' + record.port,
+                 action: action === 'allow' ? 'tunnel' : action, note: 'saved from the log'}
+              : {match: record.host, action, path, note: 'saved from the log'},
           ]}),
         });
         this.open = null;
