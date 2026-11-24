@@ -150,7 +150,7 @@ leaves docker's cache in charge and lets an offline build go through.
 ## Usage
 
 ```
-dev-agent [--ro] [--workspace] [--host-network] [--proxy] [--dind] [--gpu] [--outbox] [codex|claude|bash|tmux] [directory] [agent arguments...]
+dev-agent [--ro] [--workspace] [--host-network] [--network NAME] [--proxy] [--dind] [--gpu] [--outbox] [codex|claude|bash|tmux] [directory] [agent arguments...]
 ```
 
 `bash` drops you into a shell in the same sandbox, which is useful for
@@ -192,6 +192,13 @@ network interfaces and can talk to anything listening on localhost, including
 services bound only there — so use it for the login and drop it afterwards.
 Docker also refuses `--hostname` in that mode, so the prompt shows the host's
 hostname rather than the image's.
+
+`--network NAME` runs the container on an existing docker network
+(`docker run --network NAME`) instead of the default bridge, so it can reach
+the other containers on that network by name, such as a database from a compose
+project. It also makes the agent reachable from those containers. It cannot be
+combined with `--host-network`, `--proxy` or `--dind`. To reach services from
+behind the proxy, use `proxy_docker_network` instead.
 
 Options may be given before the command or before the directory, so both
 `dev-agent --ro claude ~/src/foo` and `dev-agent claude --ro ~/src/foo` work.

@@ -81,6 +81,11 @@ Options:
                 callback URL points at localhost. Drops the container's
                 network isolation, and the prompt then shows the host's
                 hostname instead of the image's. Not with --proxy.
+    --network NAME
+                Run on this existing docker network instead of the default
+                bridge, to reach containers on it by name. Everything on
+                that network can reach the agent too. Not with
+                --host-network, --proxy or --dind.
     --proxy     Route all network access through the dev-agent proxy and cut
                 off direct internet access. Starts the proxy if it is not
                 already running; its web UI is at http://127.0.0.1:8099.
@@ -127,6 +132,7 @@ Examples:
     dev-agent claude --ro ~/src/foo
     dev-agent --workspace claude ~/src/foo
     dev-agent --host-network codex ~/src/foo
+    dev-agent --network mynet claude ~/src/foo
     dev-agent --proxy claude ~/src/foo
     dev-agent --dind claude ~/src/foo
     dev-agent --gpu claude ~/src/foo
@@ -152,6 +158,10 @@ ro=""
 # Host network namespace, needed by auth flows that listen on localhost for a
 # callback. Off by default: it removes the container's network isolation.
 host_net=""
+
+# A docker network to run the agent on instead of the default bridge, for
+# reaching services on it directly. Empty by default.
+network=""
 
 # Route egress through the dev-agent proxy, on a docker network with no route
 # to the internet. Off by default: it needs the proxy installed, and it breaks
@@ -256,6 +266,13 @@ take_flags() {
                 flags_consumed=$((flags_consumed + 1))
                 ;;
             --image=*)   image_flag "${1#--image=}" ;;
+            --network)
+                [[ -n "${2:-}" ]] || die "--network needs a network name"
+                network="$2"
+                shift
+                flags_consumed=$((flags_consumed + 1))
+                ;;
+            --network=*) network="${1#--network=}" ;;
             *)           return ;;
         esac
 
@@ -303,6 +320,17 @@ shift "$flags_consumed"
 # be in the host's at the same time.
 [[ -n "$dind" && -n "$host_net" ]] &&
     die "--dind and --host-network cannot be combined (add --no-dind if --dind comes from default_flags)"
+
+# A container has one primary network. --proxy and --host-network pick their
+# own, and joining another network next to the proxy's would route around it.
+# Under --dind the agent has no network of its own, only the sidecar's.
+if [[ -n "$network" ]]; then
+    [[ -z "$host_net" ]] || die "--network and --host-network cannot be combined"
+    [[ -z "$proxy" ]] || die "--network and --proxy cannot be combined (add --no-proxy if --proxy comes from default_flags)"
+    [[ -z "$dind" ]] || die "--network and --dind cannot be combined (add --no-dind if --dind comes from default_flags)"
+    docker network inspect "$network" >/dev/null 2>&1 ||
+        die "--network: no docker network named $network"
+fi
 
 # The hostname mirrors the image, so the shell prompt names the variant you are
 # in. A hostname may only hold alphanumerics and hyphens, so the ':' of the tag
@@ -878,6 +906,8 @@ if [[ -n "$host_net" ]]; then
 elif [[ -z "$dind" ]]; then
     docker_args+=(--hostname "$hostname")
 fi
+
+[[ -z "$network" ]] || docker_args+=(--network "$network")
 
 if [[ -z "$host_net" ]]; then
     #
